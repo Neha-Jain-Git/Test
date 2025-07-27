@@ -1,0 +1,51 @@
+
+name: Promote to QA
+on:
+  push:
+    branches:
+      - DDIQA2024
+  workflow_dispatch:
+    inputs:
+      source_branch:
+        description: 'Source branch to merge from DDIQA2024'
+        required: true
+        default: 'DDIQA2024'
+      target_branch:
+        description: 'Target branch to merge into GH_POC'
+        required: true
+        default: 'DDIQA2024'
+permissions:
+  contents: write
+  pull-requests: write
+  checks: read
+  actions: write
+env:
+  SF_NPM_REGISTRY: https://repo1.uhc.com/artifactory/api/npm/npm-virtual/
+  environment: ghact
+  PAT_TOKEN: ${{ secrets.PAT_TOKEN }}
+jobs:
+  promote:
+    runs-on: uhg-runner-m
+    steps:
+      - name: Checkout target branch
+        uses: actions/checkout@v4
+        #with:
+        #  ref: ${{ github.event.inputs.target_branch }}
+        #  token: ${{ secrets.PAT_Token }} # Set this secret in your repo
+      - name: Configure Git
+        run: |
+          git config --global user.email "neha_jain@optum.com"      
+          git config --global user.name "Neha Jain"
+      - name: Add remote and fetch source branch
+        run: |
+          echo "Line No 36"
+          git remote add source-origin https://x-access-token:${{ secrets.PAT_TOKEN }}@github.com/${{ github.repository }}.git
+          git fetch source-origin ${{ github.event.inputs.source_branch }}
+      - name: Merge source into target
+        run: |
+          echo 'source:' + ${{ github.event.inputs.source_branch }}
+          echo 'target:' + ${{github.event.inputs.target_branch}}
+          git merge --no-ff source-origin/${{ github.event.inputs.source_branch }} -m "Promote ${{ github.event.inputs.source_branch }} to ${{ github.event.inputs.target_branch }}"
+          git push origin HEAD:${{ github.event.inputs.target_branch }}
+      - name: Success message
+        run: echo "Successfully promoted to QA"
