@@ -36,11 +36,11 @@ jobs:
       - name: Add remote and fetch source branch
         run: |
           git remote add source-origin https://x-access-token:${{ secrets.PAT_TOKEN }}@github.com/${{ github.repository }}.git
-          git fetch source-origin ${{ github.event.inputs.source_branch }}
+          git fetch test ${{ github.event.inputs.source_branch }}
       - name: Merge source into target
         run: |
           
-          git merge --no-ff source-origin/${{ github.event.inputs.source_branch }} -m "Promote ${{ github.event.inputs.source_branch }} to ${{ github.event.inputs.target_branch }}"
-          git push source-origin ${{ github.event.inputs.target_branch }}
+          git merge --no-ff test/${{ github.event.inputs.source_branch }} -m "Promote ${{ github.event.inputs.source_branch }} to ${{ github.event.inputs.target_branch }}"
+          git push test ${{ github.event.inputs.target_branch }}
       - name: Success message
         run: echo "✅ Successfully promoted ${{ github.event.inputs.source_branch }} to ${{ github.event.inputs.target_branch }}"
