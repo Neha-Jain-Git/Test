@@ -20,12 +20,12 @@ permissions:
   checks: read
   actions: write
 env:
-  SF_NPM_REGISTRY: https://repo1.uhc.com/artifactory/api/npm/npm-virtual/
-  environment: ghact
+  #SF_NPM_REGISTRY: https://repo1.uhc.com/artifactory/api/npm/npm-virtual/
+  #environment: ghact
   PAT_TOKEN: ${{ secrets.PAT_TOKEN }}
 jobs:
   promote:
-    runs-on: uhg-runner-m
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout target branch
         uses: actions/checkout@v4
