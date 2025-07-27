@@ -3,7 +3,7 @@ name: Promote to QA
 on:
   push:
     branches:
-      - Dev
+      - main
   workflow_dispatch:
     inputs:
       source_branch:
