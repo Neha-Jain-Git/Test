@@ -40,7 +40,7 @@ jobs:
       - name: Merge source into target
         run: |
           git fetch origin ${{ github.event.inputs.source_branch }}
-          git merge --no-ff origin/${{ github.event.inputs.source_branch }} -m "Promote ${{ github.event.inputs.source_branch }} to ${{ github.event.inputs.target_branch }}"
+          git merge --no-ff source-origin/${{ github.event.inputs.source_branch }} -m "Promote ${{ github.event.inputs.source_branch }} to ${{ github.event.inputs.target_branch }}"
           git push origin ${{ github.event.inputs.target_branch }}
       - name: Success message
         run: echo "✅ Successfully promoted ${{ github.event.inputs.source_branch }} to ${{ github.event.inputs.target_branch }}"
