@@ -3,17 +3,17 @@ name: Promote to QA
 on:
   push:
     branches:
-      - DDIQA2024
+      - Dev
   workflow_dispatch:
     inputs:
       source_branch:
-        description: 'Source branch to merge from DDIQA2024'
+        description: 'Source branch to merge from Dev'
         required: true
-        default: 'DDIQA2024'
+        default: 'Dev'
       target_branch:
         description: 'Target branch to merge into GH_POC'
         required: true
-        default: 'DDIQA2024'
+        default: 'QA'
 permissions:
   contents: write
   pull-requests: write
@@ -34,7 +34,7 @@ jobs:
         #  token: ${{ secrets.PAT_Token }} # Set this secret in your repo
       - name: Configure Git
         run: |
-          git config --global user.email "neha_jain@optum.com"      
+          git config --global user.email "neha.sforce@gmail.com"      
           git config --global user.name "Neha Jain"
       - name: Add remote and fetch source branch
         run: |
