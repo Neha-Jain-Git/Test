@@ -3,7 +3,21 @@ on:
   push:
     branches:
       - main
-  workflow_dispatch:
+workflow_dispatch
+  inputs:
+    source_branch:
+        description: 'Source branch to merge from (e.g. Dev)'
+        required: true
+        default: 'Dev'
+      target_branch:
+        description: 'Target branch to merge into (e.g. QA)'
+        required: true
+        default: 'QA'
+        type: choice
+        options:
+          - 'QA'
+          - 'UAT'
+          - 'STAGE'
 permissions:
   contents: write
   pull-requests: write
