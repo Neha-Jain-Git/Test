@@ -39,7 +39,7 @@ jobs:
           git fetch source-origin ${{ github.event.inputs.source_branch }}
       - name: Merge source into target
         run: |
-          git merge --no-ff source-origin/Dev -m "Promote Dev to QA"
+          git merge --no-ff --allow-unrelated-histories  source-origin/Dev -m "Promote Dev to QA"
           git push source-origin QA
           #git merge --no-ff source-origin/${{ github.event.inputs.source_branch }} -m "Promote ${{ github.event.inputs.source_branch }} to ${{ github.event.inputs.target_branch }}"
           #git push source-origin ${{ github.event.inputs.target_branch }}
