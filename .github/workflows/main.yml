@@ -6,6 +6,9 @@ on:
         description: 'Source branch to merge from (e.g. Dev)'
         required: true
         default: 'Dev'
+        type: choice
+        options:
+          - 'Dev'
       target_branch:
         description: 'Target branch to merge into (e.g. QA)'
         required: true
