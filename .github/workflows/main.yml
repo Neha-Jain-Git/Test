@@ -1,11 +1,8 @@
 name: Promote to QA
 on:
-  push:
-    branches:
-      - main
-workflow_dispatch
-  inputs:
-    source_branch:
+  workflow_dispatch:
+    inputs:
+      source_branch:
         description: 'Source branch to merge from (e.g. Dev)'
         required: true
         default: 'Dev'
