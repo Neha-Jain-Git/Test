@@ -43,8 +43,8 @@ jobs:
           git fetch source-origin ${{ github.event.inputs.source_branch }}
       - name: Merge source into target
         run: |
-          echo 'source:' + ${{ source_branch }}
-          echo 'target:' + ${{github.event.inputs.target_branch}}
+          echo 'source:' + ${{ github.event.inputs.source_branch }}
+          echo 'target:' + ${{ github.event.inputs.target_branch }}
           git merge --no-ff source-origin/${{ github.event.inputs.source_branch }} -m "Promote ${{ github.event.inputs.source_branch }} to ${{ github.event.inputs.target_branch }}"
           git push origin HEAD:${{ github.event.inputs.target_branch }}
       - name: Success message
