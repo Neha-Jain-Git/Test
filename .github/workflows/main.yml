@@ -51,10 +51,11 @@ jobs:
 
       - name: Merge changes from source to target (if any)
         run: |
-          git merge --no-ff --allow-unrelated-histories -X theirs source-origin/${{ github.event.inputs.source_branch }} \
+          git merge --no-ff --allow-unrelated-histories --strategy=recursive -X theirs source-origin/${{ github.event.inputs.source_branch }} \
             -m "Promote ${{ github.event.inputs.source_branch }} to ${{ github.event.inputs.target_branch }}" || {
               echo "⚠️ Merge had conflicts. Attempting to auto-resolve."
               git status
+              git ls-files --deleted
               git add -u
               git add .
               git commit -m "Auto-resolve merge conflict: favor source branch"
