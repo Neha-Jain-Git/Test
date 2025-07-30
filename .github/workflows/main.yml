@@ -49,15 +49,15 @@ jobs:
           git remote add source-origin https://x-access-token:${{ secrets.PAT_TOKEN }}@github.com/${{ github.repository }}.git
           git fetch source-origin ${{ github.event.inputs.source_branch }}
           
-- name: Delete files that exist in target but not in source
-  run: |
-    git checkout ${{ github.event.inputs.source_branch }}
-    rsync -a --delete ./ ../source_snapshot/
-
-    git checkout ${{ github.event.inputs.target_branch }}
-    rsync -a --delete ../source_snapshot/ ./
-    git add -u
-    git commit -m "Delete files removed in source branch" || echo "No deletions to commit"
+      - name: Delete files that exist in target but not in source
+        run: |
+          git checkout ${{ github.event.inputs.source_branch }}
+          rsync -a --delete ./ ../source_snapshot/
+          git checkout ${{ github.event.inputs.target_branch }}
+          rsync -a --delete ../source_snapshot/ ./
+          git add -u
+          git commit -m "Delete files removed in source branch" || echo "No deletions to commit"
+          
       - name: Merge changes from source to target (if any)
         run: |
           git merge --no-ff --allow-unrelated-histories --strategy=recursive -X theirs source-origin/${{ github.event.inputs.source_branch }} \
