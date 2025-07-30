@@ -55,7 +55,8 @@ jobs:
             -m "Promote ${{ github.event.inputs.source_branch }} to ${{ github.event.inputs.target_branch }}" || {
               echo "⚠️ Merge had conflicts. Attempting to auto-resolve."
               git status
-              git add -A
+              git add -u
+              git add .
               git commit -m "Auto-resolve merge conflict: favor source branch"
             }
 
