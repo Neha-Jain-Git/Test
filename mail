@@ -1,0 +1,31 @@
+- name: Get Authors of Failed Files
+  id: authors
+  run: |
+    # Ensure full repo history
+    if git rev-parse --is-shallow-repository | grep -q "true"; then
+      git fetch --unshallow
+    fi
+
+    # Get list of failed files from previous step output
+    failed_files=$(cat failed-files.txt)
+
+    if [ -z "$failed_files" ]; then
+      echo "No failed files found."
+      echo "emails=" >> $GITHUB_OUTPUT
+      exit 0
+    fi
+
+    echo "Failed files:"
+    echo "$failed_files"
+
+    # Extract unique authors' emails for those files
+    emails=$(git log --pretty=format:'%ae' --no-merges -- $failed_files | sort -u | paste -sd "," -)
+
+    if [ -z "$emails" ]; then
+      echo "No authors found."
+      echo "emails=" >> $GITHUB_OUTPUT
+      exit 0
+    fi
+
+    echo "Authors: $emails"
+    echo "emails=$emails" >> $GITHUB_OUTPUT
