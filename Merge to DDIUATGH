@@ -1,18 +1,16 @@
-name: Merge to DDIUATGH
+name: Delta Merge to DDIUATGH
 on:
-#  push:
-#    branches:
-#      - DDIQAGH
   workflow_dispatch:
 permissions:
   contents: write
   pull-requests: write
   checks: read
   actions: write
+  **repository-projects: write**   # needed to update env variable via API
+
 env:
-  # SF_NPM_REGISTRY: https://repo1.uhc.com/artifactory/api/npm/npm-virtual/
-  # environment: ghact
   PAT_TOKEN: ${{ secrets.PAT_TOKEN }}
+
 jobs:
   promote:
     runs-on: uhg-runner-m
@@ -21,31 +19,64 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: DDIUATGH
-          token: ${{ secrets.PAT_Token }} 
+          token: ${{ secrets.PAT_TOKEN }}
+
       - name: Configure Git
         run: |
-          
           git config user.email "maltss_tech@optum.com"
           git config user.name "maltssdeploy"
+
       - name: Add remote and fetch source branch
         run: |
           git remote add source-origin https://x-access-token:${{ secrets.PAT_TOKEN }}@github.com/${{ github.repository }}.git
           git fetch source-origin DDIQAGH
-      - name: Merge source into target
+
+      - name: **Get last promoted commit SHA**
+        id: lastsha
         run: |
-          git merge --no-ff --allow-unrelated-histories --strategy=recursive -X theirs source-origin/DDIQAGH \
-            -m "Promote DDIQAGH to DDIUATGH" || {
-              echo " Merge had conflicts. Attempting to auto-resolve."
-              git status
-              git ls-files --deleted
-              git add -u
-              git add .
-              git commit -m "Auto-resolve merge conflict: favor source branch"
-            }
-      - name: Push changes (only if merge succeeded)
-        if: ${{ success() }}
+          if [ -z "${{ vars.LAST_PROMOTED_SHA }}" ]; then
+            echo "last_sha=origin/DDIUATGH" >> $GITHUB_OUTPUT
+          else
+            echo "last_sha=${{ vars.LAST_PROMOTED_SHA }}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: **Find delta changes (adds/modifies)**
+        id: delta
         run: |
-          git push origin HEAD:DDIUATGH
-      - name: Success message
-        if: ${{ success() }}
-        run: echo "Successfully promoted DDIQAGH to DDIUATGH"
+          git checkout source-origin/DDIQAGH
+          echo "changed_files=$(git diff --name-only ${{ steps.lastsha.outputs.last_sha }}..HEAD --diff-filter=ACMRT -- force-app/main/default/)" >> $GITHUB_OUTPUT
+
+      - name: **Find deleted files**
+        id: deleted
+        run: |
+          git checkout source-origin/DDIQAGH
+          echo "deleted_files=$(git diff --name-only ${{ steps.lastsha.outputs.last_sha }}..HEAD --diff-filter=D -- force-app/main/default/)" >> $GITHUB_OUTPUT
+
+      - name: Checkout target branch again
+        run: git checkout DDIUATGH
+
+      - name: **Apply delta changes**
+        run: |
+          for file in ${{ steps.delta.outputs.changed_files }}; do
+            git checkout source-origin/DDIQAGH -- "$file"
+          done
+          git add force-app/main/default/
+
+          for file in ${{ steps.deleted.outputs.deleted_files }}; do
+            git rm -f "$file"
+          done
+
+          git commit -m "Delta merge force-app/main/default from DDIQAGH (with deletions)" || echo "No changes to commit"
+
+      - name: Push changes
+        run: git push origin HEAD:DDIUATGH
+
+      - name: **Update LAST_PROMOTED_SHA in GitHub Environment**
+        run: |
+          NEW_SHA=$(git rev-parse source-origin/DDIQAGH)
+          echo "Updating LAST_PROMOTED_SHA to $NEW_SHA"
+          curl -X PATCH \
+            -H "Authorization: Bearer ${{ secrets.PAT_TOKEN }}" \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/${{ github.repository }}/environments/production/variables/LAST_PROMOTED_SHA \
+            -d "{\"name\":\"LAST_PROMOTED_SHA\",\"value\":\"$NEW_SHA\"}"
