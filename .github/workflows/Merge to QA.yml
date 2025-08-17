@@ -14,7 +14,7 @@ env:
 
 jobs:
   promote:
-    runs-on: uhg-runner-m
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout target branch
         uses: actions/checkout@v4
