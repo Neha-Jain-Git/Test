@@ -1,0 +1,51 @@
+name: Merge to DDIUATGH
+on:
+#  push:
+#    branches:
+#      - DDIQAGH
+  workflow_dispatch:
+permissions:
+  contents: write
+  pull-requests: write
+  checks: read
+  actions: write
+env:
+  # SF_NPM_REGISTRY: https://repo1.uhc.com/artifactory/api/npm/npm-virtual/
+  # environment: ghact
+  PAT_TOKEN: ${{ secrets.PAT_TOKEN }}
+jobs:
+  promote:
+    runs-on: uhg-runner-m
+    steps:
+      - name: Checkout target branch
+        uses: actions/checkout@v4
+        with:
+          ref: DDIUATGH
+          token: ${{ secrets.PAT_Token }} 
+      - name: Configure Git
+        run: |
+          
+          git config user.email "maltss_tech@optum.com"
+          git config user.name "maltssdeploy"
+      - name: Add remote and fetch source branch
+        run: |
+          git remote add source-origin https://x-access-token:${{ secrets.PAT_TOKEN }}@github.com/${{ github.repository }}.git
+          git fetch source-origin DDIQAGH
+      - name: Merge source into target
+        run: |
+          git merge --no-ff --allow-unrelated-histories --strategy=recursive -X theirs source-origin/DDIQAGH \
+            -m "Promote DDIQAGH to DDIUATGH" || {
+              echo " Merge had conflicts. Attempting to auto-resolve."
+              git status
+              git ls-files --deleted
+              git add -u
+              git add .
+              git commit -m "Auto-resolve merge conflict: favor source branch"
+            }
+      - name: Push changes (only if merge succeeded)
+        if: ${{ success() }}
+        run: |
+          git push origin HEAD:DDIUATGH
+      - name: Success message
+        if: ${{ success() }}
+        run: echo "Successfully promoted DDIQAGH to DDIUATGH"
