@@ -9,6 +9,7 @@ permissions:
   repository-projects: write
 
 env:
+  environment: QA
   PAT_TOKEN: ${{ secrets.PAT_TOKEN }}
 
 jobs:
