@@ -6,7 +6,7 @@ permissions:
   pull-requests: write
   checks: read
   actions: write
-  **repository-projects: write**   # needed to update env variable via API
+  repository-projects: write
 
 env:
   PAT_TOKEN: ${{ secrets.PAT_TOKEN }}
@@ -31,31 +31,31 @@ jobs:
           git remote add source-origin https://x-access-token:${{ secrets.PAT_TOKEN }}@github.com/${{ github.repository }}.git
           git fetch source-origin DDIQAGH
 
-      - name: **Get last promoted commit SHA**
-        id: lastsha
+      - name: Get last promoted commit SHA
+        id: lastqasha
         run: |
-          if [ -z "${{ vars.LAST_PROMOTED_SHA }}" ]; then
+          if [ -z "${{ vars.LAST_PROMOTED_QA_SHA }}" ]; then
             echo "last_sha=origin/DDIUATGH" >> $GITHUB_OUTPUT
           else
-            echo "last_sha=${{ vars.LAST_PROMOTED_SHA }}" >> $GITHUB_OUTPUT
+            echo "last_sha=${{ vars.LAST_PROMOTED_QA_SHA }}" >> $GITHUB_OUTPUT
           fi
 
-      - name: **Find delta changes (adds/modifies)**
+      - name: Find delta changes (adds/modifies)
         id: delta
         run: |
           git checkout source-origin/DDIQAGH
-          echo "changed_files=$(git diff --name-only ${{ steps.lastsha.outputs.last_sha }}..HEAD --diff-filter=ACMRT -- force-app/main/default/)" >> $GITHUB_OUTPUT
+          echo "changed_files=$(git diff --name-only ${{ steps.lastqasha.outputs.last_sha }}..HEAD --diff-filter=ACMRT -- force-app/main/default/)" >> $GITHUB_OUTPUT
 
-      - name: **Find deleted files**
+      - name: Find deleted files
         id: deleted
         run: |
           git checkout source-origin/DDIQAGH
-          echo "deleted_files=$(git diff --name-only ${{ steps.lastsha.outputs.last_sha }}..HEAD --diff-filter=D -- force-app/main/default/)" >> $GITHUB_OUTPUT
+          echo "deleted_files=$(git diff --name-only ${{ steps.lastqasha.outputs.last_sha }}..HEAD --diff-filter=D -- force-app/main/default/)" >> $GITHUB_OUTPUT
 
       - name: Checkout target branch again
         run: git checkout DDIUATGH
 
-      - name: **Apply delta changes**
+      - name: Apply delta changes
         run: |
           for file in ${{ steps.delta.outputs.changed_files }}; do
             git checkout source-origin/DDIQAGH -- "$file"
@@ -71,12 +71,12 @@ jobs:
       - name: Push changes
         run: git push origin HEAD:DDIUATGH
 
-      - name: **Update LAST_PROMOTED_SHA in GitHub Environment**
+      - name: Update LAST_PROMOTED_QA_SHA in GitHub Environment
         run: |
           NEW_SHA=$(git rev-parse source-origin/DDIQAGH)
-          echo "Updating LAST_PROMOTED_SHA to $NEW_SHA"
+          echo "Updating LAST_PROMOTED_QA_SHA to $NEW_SHA"
           curl -X PATCH \
             -H "Authorization: Bearer ${{ secrets.PAT_TOKEN }}" \
             -H "Accept: application/vnd.github+json" \
-            https://api.github.com/repos/${{ github.repository }}/environments/production/variables/LAST_PROMOTED_SHA \
-            -d "{\"name\":\"LAST_PROMOTED_SHA\",\"value\":\"$NEW_SHA\"}"
+            https://api.github.com/repos/${{ github.repository }}/environments/production/variables/LAST_PROMOTED_QA_SHA \
+            -d "{\"name\":\"LAST_PROMOTED_QA_SHA\",\"value\":\"$NEW_SHA\"}"
