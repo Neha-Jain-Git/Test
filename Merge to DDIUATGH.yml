@@ -19,7 +19,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: DDIUATGH
-          token: ${{ secrets.PAT_Token }} 
+          token: ${{ secrets.PAT_TOKEN }} 
       - name: Configure Git
         run: |          
           git config user.email "maltss_tech@optum.com"
@@ -42,7 +42,7 @@ jobs:
       - name: Push changes (only if merge succeeded)
         if: ${{ success() }}
         run: |
-          git push origin HEAD:  DDIUATGH
+          git push origin HEAD:DDIUATGH
       - name: Success message
         if: ${{ success() }}
         run: echo "Successfully promoted DDIQAGH to DDIUATGH"
