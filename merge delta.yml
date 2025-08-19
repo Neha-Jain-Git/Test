@@ -26,7 +26,7 @@ jobs:
       - name: Get last promoted SHA
         id: lastsha
         run: |
-          LAST_SHA="${{ vars.LAST_PROMOTED_SHA }}"
+          LAST_SHA="${{ vars.LAST_PROMOTED_UAT_SHA }}"
           if [ -z "$LAST_SHA" ]; then
             echo "No previous SHA found, defaulting to first commit."
             LAST_SHA=$(git rev-list origin/DDIQAGH | tail -n 1)
