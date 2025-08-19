@@ -1,0 +1,56 @@
+name: Delta Promote Folder (force-app/main/default/**)
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  promote:
+    runs-on: uhg-runner-m
+    steps:
+      - name: Checkout target branch (UAT)
+        uses: actions/checkout@v4
+        with:
+          ref: DDIUATGH
+          token: ${{ secrets.PAT_TOKEN }}
+
+      - name: Configure Git
+        run: |
+          git config user.email "maltss_tech@optum.com"
+          git config user.name "maltssdeploy"
+
+      - name: Fetch source branch (QA)
+        run: git fetch origin DDIQAGH
+
+      - name: Get last promoted SHA
+        id: lastsha
+        run: |
+          LAST_SHA="${{ vars.LAST_PROMOTED_SHA }}"
+          if [ -z "$LAST_SHA" ]; then
+            echo "No previous SHA found, defaulting to first commit."
+            LAST_SHA=$(git rev-list origin/DDIQAGH | tail -n 1)
+          fi
+          echo "last_sha=$LAST_SHA" >> $GITHUB_OUTPUT
+
+      - name: Copy only folder changes
+        run: |
+          CHANGED_FILES=$(git diff --name-only ${{ steps.lastsha.outputs.last_sha }} origin/DDIQAGH -- force-app/main/default/)
+          if [ -z "$CHANGED_FILES" ]; then
+            echo "No changes detected in force-app/main/default, skipping commit."
+            exit 0
+          fi
+
+          git checkout origin/DDIQAGH -- $CHANGED_FILES
+          git add $CHANGED_FILES
+          git commit -m "Delta promote force-app/main/default from DDIQAGH to DDIUATGH"
+
+      - name: Push changes
+        run: git push origin HEAD:DDIUATGH
+
+      - name: Save new promoted SHA
+        run: |
+          NEW_SHA=$(git rev-parse origin/DDIQAGH)
+          gh variable set LAST_PROMOTED_SHA --body "$NEW_SHA"
+        env:
+          GH_TOKEN: ${{ secrets.PAT_TOKEN }}
