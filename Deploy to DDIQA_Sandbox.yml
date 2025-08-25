@@ -45,6 +45,7 @@ jobs:
           echo "$HOME/sfdx/bin" >> $GITHUB_PATH
           export PATH=$HOME/sfdx/bin:$PATH
           sf version
+
       - name: Populate auth file with SF_AUTH secret
         run: |
           echo "${{ secrets.SF_DDIQA_AUTH_URL }}" > ./AUTHURL.txt
@@ -52,6 +53,7 @@ jobs:
             echo "Missing AUTHURL secret"
             exit 1
           fi
+
       - name: Authenticate to the Org
         run: sf org login sfdx-url --sfdx-url-file ./AUTHURL.txt --set-default --alias thisOrg
 
@@ -66,6 +68,7 @@ jobs:
             --output-dir build/temp/changed-sources/ --generate-delta --source-dir force-app/ --ignore-file .gitignore
           find build/temp/changed-sources/ -type d -empty -delete
           zip -r build/temp/changed-sources.zip build/temp/changed-sources/
+
       - name: Upload zip artifact
         uses: actions/upload-artifact@v4
         with:
@@ -88,6 +91,7 @@ jobs:
             echo "Deployment succeeded."
             echo "deploy_status=Succeeded" >> $GITHUB_OUTPUT
           fi
+
       - name: Upload deployment result
         if: always()
         uses: actions/upload-artifact@v4
@@ -120,6 +124,7 @@ jobs:
               | grep -v null > error-msg.txt || true
             echo "errors=$(sed ':a;N;$!ba;s/\n/\\n/g' error-msg.txt)" >> $GITHUB_OUTPUT
           fi
+
       - name: Extract Failed Files
         id: failed_files
         run: |
@@ -187,6 +192,7 @@ jobs:
       - name: Save last good SHA
         run: |
           echo "LAST_GOOD_SHA_DDIQA=$(git rev-parse HEAD)" >> $GITHUB_ENV
+
       - name: Update LAST_GOOD_SHA_DDIQA in Environment
         run: |
           OWNER=${{ github.repository_owner }}
