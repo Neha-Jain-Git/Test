@@ -34,6 +34,7 @@ jobs:
           echo "last_sha=$LAST_SHA" >> $GITHUB_OUTPUT
 
       - name: Copy only folder changes
+        id: changes
         run: |
           CHANGED_FILES=$(git diff --name-only ${{ steps.lastsha.outputs.last_sha }} origin/DDIQAGH -- force-app/main/default/)
           if [ -z "$CHANGED_FILES" ]; then
@@ -41,9 +42,57 @@ jobs:
             exit 0
           fi
 
+          echo "$CHANGED_FILES" > changed_files.txt
           git checkout origin/DDIQAGH -- $CHANGED_FILES
           git add $CHANGED_FILES
           git commit -m "Delta promote force-app/main/default from DDIQAGH to DDIUATGH"
+
+      - name: Generate package.xml
+        run: |
+          echo '<?xml version="1.0" encoding="UTF-8"?>' > package.xml
+          echo '<Package xmlns="http://soap.sforce.com/2006/04/metadata">' >> package.xml
+          declare -A TYPES
+
+          while read FILE; do
+            META_PATH=${FILE#force-app/main/default/}
+            META_TYPE=$(dirname "$META_PATH")
+            META_NAME=$(basename "$META_PATH" .xml)
+
+            # Map folder to MetadataType (expand as needed)
+            case $META_TYPE in
+              classes) TYPE="ApexClass";;
+              triggers) TYPE="ApexTrigger";;
+              lwc) TYPE="LightningComponentBundle";;
+              aura) TYPE="AuraDefinitionBundle";;
+              objects*) TYPE="CustomObject";;
+              labels) TYPE="CustomLabels";;
+              layouts) TYPE="Layout";;
+              *) TYPE="Unknown";;
+            esac
+
+            if [ "$TYPE" != "Unknown" ]; then
+              TYPES[$TYPE]="${TYPES[$TYPE]}<members>${META_NAME}</members>"
+            fi
+          done < changed_files.txt
+
+          for TYPE in "${!TYPES[@]}"; do
+            echo "  <types>" >> package.xml
+            echo "    ${TYPES[$TYPE]}" >> package.xml
+            echo "    <name>${TYPE}</name>" >> package.xml
+            echo "  </types>" >> package.xml
+          done
+
+          echo "  <version>60.0</version>" >> package.xml
+          echo "</Package>" >> package.xml
+
+          echo "Generated package.xml:"
+          cat package.xml
+
+      - name: Upload package.xml as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: delta-package
+          path: package.xml
 
       - name: Push changes
         run: git push origin HEAD:DDIUATGH
@@ -51,6 +100,6 @@ jobs:
       - name: Save new promoted SHA
         run: |
           NEW_SHA=$(git rev-parse origin/DDIQAGH)
-          gh variable set LAST_PROMOTED_SHA --body "$NEW_SHA"
+          gh variable set LAST_PROMOTED_UAT_SHA --body "$NEW_SHA"
         env:
           GH_TOKEN: ${{ secrets.PAT_TOKEN }}
