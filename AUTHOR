@@ -1,0 +1,14 @@
+Run touch authors.txt
+  touch authors.txt
+  while IFS= read -r file; do
+    git log -1 --pretty=format:'%ae' -- "$file" >> authors.txt || true
+  done < failed-files.txt
+  sort -u authors.txt > unique-authors.txt
+  echo "authors=$(paste -sd ',' unique-authors.txt)" >> $GITHUB_OUTPUT
+  echo "authors=$(paste -sd ',' unique-authors.txt)" 
+  shell: /usr/bin/bash -e {0}
+  env:
+    environment: DDIQA
+    SF_DDIQA_AUTH_URL: ***
+    PAT_TOKEN: ***
+authors=
