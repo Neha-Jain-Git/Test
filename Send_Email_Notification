@@ -1,0 +1,83 @@
+ Send_Email_Notification:
+    runs-on: uhg-runner-m
+    environment: DDIQA
+    needs: deploy-on-merge
+    if: always()
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download deployment result
+        uses: actions/download-artifact@v4
+        with:
+          name: deploy-result
+
+      - name: Extract Error Message
+        id: errors
+        run: |
+          if [[ "${{ needs.deploy-on-merge.outputs.deploy_status }}" == "Failed" ]]; then
+            jq -r '.result.details.componentFailures[]?.problem' deploy-result.json \
+              | grep -v null > error-msg.txt || true
+            echo "errors=$(sed ':a;N;$!ba;s/\n/\\n/g' error-msg.txt)" >> $GITHUB_OUTPUT
+          fi
+      - name: Extract Failed Files
+        id: failed_files
+        run: |
+          jq -r '.result.details.componentFailures[]?.fileName' deploy-result.json \
+            | grep -v null | sort -u > failed-files.txt || true
+          echo "files=$(paste -sd ',' failed-files.txt)" >> $GITHUB_OUTPUT
+          
+      - name: Send Email on Failure
+        if: needs.deploy-on-merge.outputs.deploy_status == 'Failed'
+        uses: uhg-pipelines/epl-send-mail@v1
+        with:
+          subject: "Build Failure - Your files caused errors"
+          to: neha_jain@optum.com
+          cc: chandrasekhar_uppalapati@optum.com
+          from: "notifications@github.com"
+          body: |
+            The deployment to QA failed due to issues in the following files:
+                  ${{ steps.failed_files.outputs.files }}
+      
+            Error details:
+                  ${{ steps.errors.outputs.errors }}
+
+  save_last_good_sha:
+    runs-on: uhg-runner-m
+    environment: DDIQA
+    needs: deploy-on-merge
+    if: needs.deploy-on-merge.outputs.deploy_status == 'Succeeded'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Save last good SHA
+        run: |
+          echo "LAST_GOOD_SHA_DDIQA=$(git rev-parse HEAD)" >> $GITHUB_ENV
+          echo "LAST_GOOD_SHA_DDIQA=$(git rev-parse HEAD)"
+      - name: Update LAST_GOOD_SHA_DDIQA in Environment
+        run: |
+          OWNER=${{ github.repository_owner }}
+          REPO=$(echo "${{ github.repository }}" | cut -d'/' -f2)
+          ENVIRONMENT="${{ env.environment }}"
+          VARIABLE_NAME="LAST_GOOD_SHA_DDIQA"
+          NEW_VALUE=$(git rev-parse HEAD)
+          echo "NEW_VALUE: $NEW_VALUE"
+          RESPONSE=$(curl -s -o response.json -w "%{http_code}" -X PATCH \
+            -H "Authorization: token ${{ secrets.PAT_TOKEN }}" \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/$OWNER/$REPO/environments/$ENVIRONMENT/variables/$VARIABLE_NAME \
+            -d "{\"name\":\"$VARIABLE_NAME\",\"value\":\"$NEW_VALUE\"}")
+            echo "RESPONSE: $RESPONSE"
+          if [[ "$RESPONSE" -ge 200 && "$RESPONSE" -lt 300 ]]; then
+            echo "✅ Successfully updated $VARIABLE_NAME."
+          else
+            echo "❌ Failed to update $VARIABLE_NAME. HTTP status: $RESPONSE"
+            cat response.json
+          fi
