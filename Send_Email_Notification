@@ -1,18 +1,17 @@
-- name: Save last good SHA to environment variable
+- name: Save last good SHA to repo variable
       run: |
         OWNER=${{ github.repository_owner }}
         REPO=$(echo "${{ github.repository }}" | cut -d'/' -f2)
-        ENVIRONMENT="DDIQA"
         VARIABLE_NAME="LAST_GOOD_SHA_DDIQA"
         NEW_VALUE=$(git rev-parse HEAD)
 
-        echo "Saving $NEW_VALUE into environment $ENVIRONMENT"
+        echo "Saving $NEW_VALUE into repo variable $VARIABLE_NAME"
 
         # Try to update variable (PATCH)
         RESPONSE=$(curl -s -o response.json -w "%{http_code}" -X PATCH \
           -H "Authorization: token ${{ secrets.PAT_TOKEN }}" \
           -H "Accept: application/vnd.github+json" \
-          https://api.github.com/repos/$OWNER/$REPO/environments/$ENVIRONMENT/variables/$VARIABLE_NAME \
+          https://api.github.com/repos/$OWNER/$REPO/actions/variables/$VARIABLE_NAME \
           -d "{\"name\":\"$VARIABLE_NAME\",\"value\":\"$NEW_VALUE\"}")
 
         echo "PATCH response: $RESPONSE"
@@ -24,7 +23,7 @@
           RESPONSE=$(curl -s -o response.json -w "%{http_code}" -X POST \
             -H "Authorization: token ${{ secrets.PAT_TOKEN }}" \
             -H "Accept: application/vnd.github+json" \
-            https://api.github.com/repos/$OWNER/$REPO/environments/$ENVIRONMENT/variables \
+            https://api.github.com/repos/$OWNER/$REPO/actions/variables \
             -d "{\"name\":\"$VARIABLE_NAME\",\"value\":\"$NEW_VALUE\"}")
           echo "POST response: $RESPONSE"
           cat response.json
