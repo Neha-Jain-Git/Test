@@ -2,6 +2,8 @@
         run: |
           OWNER=${{ github.repository_owner }}
           REPO=$(echo "${{ github.repository }}" | cut -d'/' -f2)
+
+          # Get numeric repo ID
           REPO_ID=$(curl -s -H "Authorization: token ${{ secrets.PAT_TOKEN }}" \
             https://api.github.com/repos/$OWNER/$REPO | jq -r .id)
 
@@ -11,6 +13,7 @@
 
           echo "NEW_VALUE: $NEW_VALUE"
 
+          # Try update (PATCH)
           RESPONSE=$(curl -s -o response.json -w "%{http_code}" -X PATCH \
             -H "Authorization: token ${{ secrets.PAT_TOKEN }}" \
             -H "Accept: application/vnd.github+json" \
@@ -18,9 +21,19 @@
             -d "{\"name\":\"$VARIABLE_NAME\",\"value\":\"$NEW_VALUE\"}")
 
           echo "RESPONSE: $RESPONSE"
+
+          if [[ "$RESPONSE" -eq 404 ]]; then
+            echo "Variable not found, creating..."
+            RESPONSE=$(curl -s -o response.json -w "%{http_code}" -X POST \
+              -H "Authorization: token ${{ secrets.PAT_TOKEN }}" \
+              -H "Accept: application/vnd.github+json" \
+              https://api.github.com/repositories/$REPO_ID/environments/$ENVIRONMENT/variables \
+              -d "{\"name\":\"$VARIABLE_NAME\",\"value\":\"$NEW_VALUE\"}")
+          fi
+
           if [[ "$RESPONSE" -ge 200 && "$RESPONSE" -lt 300 ]]; then
-            echo "✅ Successfully updated $VARIABLE_NAME."
+            echo "✅ Successfully saved $VARIABLE_NAME."
           else
-            echo "❌ Failed to update $VARIABLE_NAME. HTTP status: $RESPONSE"
+            echo "❌ Failed to save $VARIABLE_NAME. HTTP status: $RESPONSE"
             cat response.json
           fi
