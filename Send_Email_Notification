@@ -1,17 +1,24 @@
 # This GitHub Actions workflow deploys changes to the sandbox environment.
-# It is triggered manually via repository_dispatch.
-# The repository_dispatch event triggers only if the code resides in the default branchd.
-# Pull requests merged by bots may not trigger workflows as intended. Using repository_dispatch ensures workflows are manually triggered and executed reliably.
-# 
-# Using a Personal Access Token (PAT) instead of the default GITHUB_TOKEN due to insufficient permissions for updating repository or environment variables.
+# It is triggered by:
+#   - Push to DDIQAGH branch
+#   - Merged Pull Request into DDIQAGH branch
+#   - Manual workflow_dispatch
+#
+# Uses PAT instead of default GITHUB_TOKEN due to insufficient permissions
+# for updating repository/environment variables.
+
 on:
   push:
     branches:
       - DDIQAGH
     paths:
       - 'force-app/main/default/**'
+  pull_request:
+    types: [closed]
+    branches:
+      - DDIQAGH
   workflow_dispatch:
-  
+
 permissions:
   contents: write
   pull-requests: write
@@ -25,7 +32,12 @@ env:
 
 jobs:
   deploy-on-merge:
-    #if: github.event.pull_request.merged == true && github.event.pull_request.base.ref == 'DDIQAGH'
+    # Run only if push to DDIQAGH, or merged PR into DDIQAGH, or manual dispatch
+    if: |
+      (github.event_name == 'push' && github.ref == 'refs/heads/DDIQAGH') ||
+      (github.event_name == 'pull_request' && github.event.pull_request.merged == true && github.event.pull_request.base.ref == 'DDIQAGH') ||
+      (github.event_name == 'workflow_dispatch')
+
     runs-on: uhg-runner-m
     environment: DDIQA
 
@@ -44,8 +56,8 @@ jobs:
           mkdir ~/sfdx
           tar xJf sf-linux-x64.tar.xz -C ~/sfdx --strip-components 1
           echo "$HOME/sfdx/bin" >> $GITHUB_PATH
-          export PATH=$HOME/sfdx/bin:$PATH
           sf version
+
       - name: Populate auth file with SF_AUTH secret
         run: |
           echo "${{ secrets.SF_DDIQA_AUTH_URL }}" > ./AUTHURL.txt
@@ -53,6 +65,7 @@ jobs:
             echo "Missing AUTHURL secret"
             exit 1
           fi
+
       - name: Authenticate to the Org
         run: sf org login sfdx-url --sfdx-url-file ./AUTHURL.txt --set-default --alias thisOrg
 
@@ -69,7 +82,7 @@ jobs:
           zip -r build/temp/changed-sources.zip build/temp/changed-sources/
           echo "Contents of package.xml:"
           cat build/temp/changed-sources/package/package.xml
-          
+
       - name: Upload zip artifact
         uses: actions/upload-artifact@v4
         with:
@@ -81,7 +94,6 @@ jobs:
           rm -f build/temp/changed-sources/destructiveChanges.xml
           rm -f build/temp/changed-sources/destructiveChangesPost.xml
 
-          
       - name: Deploy to Sandbox
         id: deploy
         run: |
@@ -102,6 +114,7 @@ jobs:
             echo "Deployment succeeded."
             echo "deploy_status=Succeeded" >> $GITHUB_OUTPUT
           fi
+
       - name: Upload deployment result
         if: always()
         uses: actions/upload-artifact@v4
@@ -129,25 +142,37 @@ jobs:
       - name: Extract Error Message
         id: errors
         run: |
-          if [[ "${{ needs.deploy-on-merge.outputs.deploy_status }}" == "Failed" ]]; then
+          if [[ "${{ needs.deploy-on-merge.outputs.deploy_status }}" == "Failed" ]] && [ -s deploy-result.json ]; then
             jq -r '.result.details.componentFailures[]?.problem' deploy-result.json \
               | grep -v null > error-msg.txt || true
             echo "errors=$(sed ':a;N;$!ba;s/\n/\\n/g' error-msg.txt)" >> $GITHUB_OUTPUT
           fi
+
       - name: Extract Failed Files
         id: failed_files
         run: |
           jq -r '.result.details.componentFailures[]?.fileName' deploy-result.json \
             | grep -v null | sort -u > failed-files.txt || true
           echo "files=$(paste -sd ',' failed-files.txt)" >> $GITHUB_OUTPUT
-          
+
+      - name: Extract Failed File Authors
+        id: authors
+        if: needs.deploy-on-merge.outputs.deploy_status == 'Failed'
+        run: |
+          touch authors.txt
+          while IFS= read -r file; do
+            git log -1 --pretty=format:'%ae' -- "$file" >> authors.txt || true
+          done < failed-files.txt
+          sort -u authors.txt > unique-authors.txt
+          echo "authors=$(paste -sd ',' unique-authors.txt)" >> $GITHUB_OUTPUT
+
       - name: Send Email on Failure
         if: needs.deploy-on-merge.outputs.deploy_status == 'Failed'
         uses: uhg-pipelines/epl-send-mail@v1
         with:
           subject: "Build Failure - Your files caused errors"
-          to: neha_jain@optum.com
-          cc: chandrasekhar_uppalapati@optum.com
+          to: ${{ steps.authors.outputs.authors }}
+          cc: neha_jain@optum.com,chandrasekhar_uppalapati@optum.com
           from: "notifications@github.com"
           body: |
             The deployment to QA failed due to issues in the following files:
@@ -167,6 +192,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
       - name: Update LAST_GOOD_SHA_DDIQA environment variable
         env:
           GITHUB_TOKEN: ${{ secrets.PAT_TOKEN }}
@@ -174,10 +200,10 @@ jobs:
           REPO: ${{ github.event.repository.name }}
           ENV_NAME: DDIQA
           VARIABLE_NAME: LAST_GOOD_SHA_DDIQA
-          SHA: ${{ github.sha }}
+          SHA: ${{ github.event.pull_request.merge_commit_sha || github.sha }}
         run: |
           echo "Updating $VARIABLE_NAME in environment $ENV_NAME with SHA=$SHA"
-      
+
           # Try to update (PATCH)
           RESPONSE=$(curl -s -o response.json -w "%{http_code}" \
             -X PATCH \
@@ -185,7 +211,7 @@ jobs:
             -H "Authorization: Bearer $GITHUB_TOKEN" \
             https://api.github.com/repos/$OWNER/$REPO/environments/$ENV_NAME/variables/$VARIABLE_NAME \
             -d "{\"name\":\"$VARIABLE_NAME\",\"value\":\"$SHA\"}")
-      
+
           if [ "$RESPONSE" -eq 404 ]; then
             echo "Variable not found, creating instead..."
             RESPONSE=$(curl -s -o response.json -w "%{http_code}" \
@@ -195,6 +221,12 @@ jobs:
               https://api.github.com/repos/$OWNER/$REPO/environments/$ENV_NAME/variables \
               -d "{\"name\":\"$VARIABLE_NAME\",\"value\":\"$SHA\"}")
           fi
-      
+
+          if [ "$RESPONSE" -ge 400 ]; then
+            echo "❌ Failed to update/create variable $VARIABLE_NAME"
+            cat response.json
+            exit 1
+          fi
+
           echo "HTTP Response: $RESPONSE"
           cat response.json
