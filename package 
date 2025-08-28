@@ -1,0 +1,67 @@
+- name: Generate package.xml & destructiveChanges.xml
+        run: |
+          mkdir -p artifacts
+
+          # Initialize package.xml
+          echo '<?xml version="1.0" encoding="UTF-8"?>' > artifacts/package.xml
+          echo '<Package xmlns="http://soap.sforce.com/2006/04/metadata">' >> artifacts/package.xml
+
+          # Initialize destructiveChanges.xml
+          echo '<?xml version="1.0" encoding="UTF-8"?>' > artifacts/destructiveChanges.xml
+          echo '<Package xmlns="http://soap.sforce.com/2006/04/metadata">' >> artifacts/destructiveChanges.xml
+
+          # Get ALL changed files between branches
+          CHANGED_FILES=$(git diff --name-status origin/DDIUATGH..origin/DDIQAGH | grep "force-app/main/default" || true)
+
+          declare -A ADD_OR_MOD_TYPES
+          declare -A DEL_TYPES
+
+          while read -r status file; do
+            TYPE=$(dirname "$file" | sed -E 's|force-app/main/default/([^/]+).*|\1|')
+            MEMBER=$(basename "$file" | sed -E 's|\.[^\.]+$||')
+            MEMBER=$(echo "$MEMBER" | sed 's/-meta//')
+
+            if [[ "$status" == "D" ]]; then
+              DEL_TYPES["$TYPE"]+="$MEMBER "
+            else
+              ADD_OR_MOD_TYPES["$TYPE"]+="$MEMBER "
+            fi
+          done <<< "$CHANGED_FILES"
+
+          # Write package.xml
+          for TYPE in "${!ADD_OR_MOD_TYPES[@]}"; do
+            echo "  <types>" >> artifacts/package.xml
+            for MEMBER in ${ADD_OR_MOD_TYPES[$TYPE]}; do
+              echo "    <members>$MEMBER</members>" >> artifacts/package.xml
+            done
+            echo "    <name>$TYPE</name>" >> artifacts/package.xml
+            echo "  </types>" >> artifacts/package.xml
+          done
+          echo "  <version>60.0</version>" >> artifacts/package.xml
+          echo "</Package>" >> artifacts/package.xml
+
+          # Write destructiveChanges.xml
+          for TYPE in "${!DEL_TYPES[@]}"; do
+            echo "  <types>" >> artifacts/destructiveChanges.xml
+            for MEMBER in ${DEL_TYPES[$TYPE]}; do
+              echo "    <members>$MEMBER</members>" >> artifacts/destructiveChanges.xml
+            done
+            echo "    <name>$TYPE</name>" >> artifacts/destructiveChanges.xml
+            echo "  </types>" >> artifacts/destructiveChanges.xml
+          done
+          echo "  <version>60.0</version>" >> artifacts/destructiveChanges.xml
+          echo "</Package>" >> artifacts/destructiveChanges.xml
+
+      - name: Upload package.xml & destructiveChanges.xml as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: metadata-packages
+          path: artifacts/
+
+      - name: Echo generated XML files
+        run: |
+          echo "===== package.xml ====="
+          cat artifacts/package.xml
+          echo ""
+          echo "===== destructiveChanges.xml ====="
+          cat artifacts/destructiveChanges.xml
