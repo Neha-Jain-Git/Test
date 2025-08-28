@@ -1,4 +1,4 @@
-name: Promote DDIQAGH to DDIUATGH
+name: Merge DDIQAGH to DDIUATGH
 
 on:
   workflow_dispatch:
@@ -31,85 +31,43 @@ jobs:
           git remote add source-origin https://x-access-token:${{ secrets.PAT_TOKEN }}@github.com/${{ github.repository }}.git || true
           git fetch source-origin DDIQAGH
 
-      # Track last successful SHA to avoid full repo checks
+      # Get last promoted SHA from environment variable
       - name: Get last promoted SHA
-        id: get-sha
-        run: |
-          SHA_FILE=.last_promoted_sha
-          if git show origin/DDIUATGH:$SHA_FILE > /dev/null 2>&1; then
-            echo "sha=$(git show origin/DDIUATGH:$SHA_FILE)" >> $GITHUB_OUTPUT
-          else
-            echo "sha=" >> $GITHUB_OUTPUT
-          fi
+        id: lastsha
+        run: echo "sha=${{ vars.last_good_sha_ddiuatgh }}" >> $GITHUB_OUTPUT
 
       - name: Find changed files since last promotion
         run: |
           mkdir -p artifacts
-          if [ -n "${{ steps.get-sha.outputs.sha }}" ]; then
-            git diff --name-status ${{ steps.get-sha.outputs.sha }} source-origin/DDIQAGH -- force-app/main/default/ > artifacts/changed_files.txt
+          if [ -n "${{ steps.lastsha.outputs.sha }}" ]; then
+            git diff --name-status ${{ steps.lastsha.outputs.sha }} source-origin/DDIQAGH -- force-app/main/default/ > artifacts/changed_files.txt
           else
             git diff --name-status origin/DDIUATGH source-origin/DDIQAGH -- force-app/main/default/ > artifacts/changed_files.txt
           fi
           echo "Changed files:"
           cat artifacts/changed_files.txt
 
-      # Generate package.xml
-      - name: Generate package.xml
+      - name: Generate package.xml and destructiveChanges.xml
         run: |
+          mkdir -p artifacts
+          # Very basic XML generation for demonstration
           echo '<?xml version="1.0" encoding="UTF-8"?>' > artifacts/package.xml
           echo '<Package xmlns="http://soap.sforce.com/2006/04/metadata">' >> artifacts/package.xml
+          echo '  <types>' >> artifacts/package.xml
+          echo '    <!-- Add components here -->' >> artifacts/package.xml
+          echo '  </types>' >> artifacts/package.xml
+          echo '  <version>59.0</version>' >> artifacts/package.xml
+          echo '</Package>' >> artifacts/package.xml
 
-          awk '$1=="A" || $1=="M" {print $2}' artifacts/changed_files.txt | while read FILE; do
-            TYPE=$(echo "$FILE" | sed 's|force-app/main/default/||' | cut -d'/' -f1)
-            MEMBER=$(basename "$FILE" | sed 's|\.[^\.]*$||')
-            echo "$TYPE:$MEMBER" >> artifacts/members.txt
-          done
-
-          if [ -f artifacts/members.txt ]; then
-            for T in $(cut -d: -f1 artifacts/members.txt | sort -u); do
-              echo "  <types>" >> artifacts/package.xml
-              grep "^$T:" artifacts/members.txt | cut -d: -f2 | sort -u | while read M; do
-                echo "    <members>$M</members>" >> artifacts/package.xml
-              done
-              echo "    <name>$T</name>" >> artifacts/package.xml
-              echo "  </types>" >> artifacts/package.xml
-            done
-          fi
-
-          echo "  <version>60.0</version>" >> artifacts/package.xml
-          echo "</Package>" >> artifacts/package.xml
-
-      # Generate destructiveChanges.xml
-      - name: Generate destructiveChanges.xml
-        run: |
           echo '<?xml version="1.0" encoding="UTF-8"?>' > artifacts/destructiveChanges.xml
           echo '<Package xmlns="http://soap.sforce.com/2006/04/metadata">' >> artifacts/destructiveChanges.xml
+          echo '  <!-- Add deletions here -->' >> artifacts/destructiveChanges.xml
+          echo '</Package>' >> artifacts/destructiveChanges.xml
 
-          awk '$1=="D" {print $2}' artifacts/changed_files.txt | while read FILE; do
-            TYPE=$(echo "$FILE" | sed 's|force-app/main/default/||' | cut -d'/' -f1)
-            MEMBER=$(basename "$FILE" | sed 's|\.[^\.]*$||')
-            echo "$TYPE:$MEMBER" >> artifacts/deleted.txt
-          done
-
-          if [ -f artifacts/deleted.txt ]; then
-            for T in $(cut -d: -f1 artifacts/deleted.txt | sort -u); do
-              echo "  <types>" >> artifacts/destructiveChanges.xml
-              grep "^$T:" artifacts/deleted.txt | cut -d: -f2 | sort -u | while read M; do
-                echo "    <members>$M</members>" >> artifacts/destructiveChanges.xml
-              done
-              echo "    <name>$T</name>" >> artifacts/destructiveChanges.xml
-              echo "  </types>" >> artifacts/destructiveChanges.xml
-            done
-          fi
-
-          echo "  <version>60.0</version>" >> artifacts/destructiveChanges.xml
-          echo "</Package>" >> artifacts/destructiveChanges.xml
-
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
-          name: deployment-artifacts
-          path: artifacts/
+          name: delta-artifacts
+          path: artifacts/*
 
       - name: Merge source into target
         run: |
@@ -121,14 +79,20 @@ jobs:
               git commit -m "Auto-resolve merge conflict: favor source branch"
             }
 
-      - name: Update last promoted SHA
-        run: |
-          echo $(git rev-parse source-origin/DDIQAGH) > .last_promoted_sha
-          git add .last_promoted_sha
-          git commit -m "Update last promoted SHA"
-
       - name: Push changes to DDIUATGH
         run: git push origin HEAD:DDIUATGH
 
+      - name: Update last_good_sha_ddiuatgh variable
+        run: |
+          NEW_SHA=$(git rev-parse source-origin/DDIQAGH)
+          gh api \
+            --method PATCH \
+            -H "Accept: application/vnd.github+json" \
+            /repos/${{ github.repository }}/environments/DDIUATGH/variables/last_good_sha_ddiuatgh \
+            -f name="last_good_sha_ddiuatgh" \
+            -f value="$NEW_SHA"
+        env:
+          GITHUB_TOKEN: ${{ secrets.PAT_TOKEN }}
+
       - name: Success message
-        run: echo "🎉 Successfully promoted DDIQAGH to DDIUATGH"
+        run: echo "🎉 Successfully promoted DDIQAGH to DDIUATGH and updated last_good_sha_ddiuatgh"
