@@ -1,232 +1,70 @@
-# This GitHub Actions workflow deploys changes to the sandbox environment.
-# It is triggered by:
-#   - Push to DDIQAGH branch
-#   - Merged Pull Request into DDIQAGH branch
-#   - Manual workflow_dispatch
-#
-# Uses PAT instead of default GITHUB_TOKEN due to insufficient permissions
-# for updating repository/environment variables.
-
-on:
-  push:
-    branches:
-      - DDIQAGH
-    paths:
-      - 'force-app/main/default/**'
-  pull_request:
-    types: [closed]
-    branches:
-      - DDIQAGH
-  workflow_dispatch:
-
-permissions:
-  contents: write
-  pull-requests: write
-  checks: read
-  actions: write
-
-env:
+Send_Email_Notification:
+  runs-on: uhg-runner-m
   environment: DDIQA
-  SF_DDIQA_AUTH_URL: ${{ secrets.SF_DDIQA_AUTH_URL }}
-  PAT_TOKEN: ${{ secrets.PAT_TOKEN }}
+  needs: deploy-on-merge
+  if: always()
 
-jobs:
-  deploy-on-merge:
-    # Run only if push to DDIQAGH, or merged PR into DDIQAGH, or manual dispatch
-    if: |
-      (github.event_name == 'push' && github.ref == 'refs/heads/DDIQAGH') ||
-      (github.event_name == 'pull_request' && github.event.pull_request.merged == true && github.event.pull_request.base.ref == 'DDIQAGH') ||
-      (github.event_name == 'workflow_dispatch')
+  steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
 
-    runs-on: uhg-runner-m
-    environment: DDIQA
+    - name: Download deployment result
+      uses: actions/download-artifact@v4
+      with:
+        name: deploy-result
 
-    outputs:
-      deploy_status: ${{ steps.deploy.outputs.deploy_status }}
+    - name: Extract Error Message
+      id: errors
+      run: |
+        if [[ "${{ needs.deploy-on-merge.outputs.deploy_status }}" == "Failed" ]]; then
+          jq -r '.result.details.componentFailures[]?.problem' deploy-result.json \
+            | grep -v null > error-msg.txt || true
+          echo "errors=$(sed ':a;N;$!ba;s/\n/\\n/g' error-msg.txt)" >> $GITHUB_OUTPUT
+        fi
 
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+    - name: Extract Failed Files
+      id: failed_files
+      run: |
+        jq -r '.result.details.componentFailures[]?.fileName' deploy-result.json \
+          | grep -v null | sort -u > failed-files.txt || true
+        echo "files=$(paste -sd ',' failed-files.txt)" >> $GITHUB_OUTPUT
 
-      - name: Install Salesforce CLI
-        run: |
-          wget https://developer.salesforce.com/media/salesforce-cli/sf/channels/stable/sf-linux-x64.tar.xz
-          mkdir ~/sfdx
-          tar xJf sf-linux-x64.tar.xz -C ~/sfdx --strip-components 1
-          echo "$HOME/sfdx/bin" >> $GITHUB_PATH
-          sf version
+    - name: Map PR requester to email
+      id: pr_author
+      run: |
+        if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+          REQUESTER=${{ github.event.pull_request.user.login }}
+        else
+          # fallback if it’s a push (protected branch normally prevents this)
+          REQUESTER="unknown"
+        fi
 
-      - name: Populate auth file with SF_AUTH secret
-        run: |
-          echo "${{ secrets.SF_DDIQA_AUTH_URL }}" > ./AUTHURL.txt
-          if [ $(wc -c < "./AUTHURL.txt") -le 1 ]; then
-            echo "Missing AUTHURL secret"
-            exit 1
-          fi
+        echo "PR opened by: $REQUESTER"
 
-      - name: Authenticate to the Org
-        run: sf org login sfdx-url --sfdx-url-file ./AUTHURL.txt --set-default --alias thisOrg
+        case "$REQUESTER" in
+          neha-jain) EMAIL="neha_jain@optum.com" ;;
+          john-doe)  EMAIL="john.doe@optum.com" ;;
+          # add mappings for all GitHub usernames here
+          *) EMAIL="default-notify@optum.com" ;;
+        esac
 
-      - name: Install sfdx git delta
-        run: echo y | sf plugins install sfdx-git-delta
+        echo "email=$EMAIL" >> $GITHUB_OUTPUT
 
-      - name: Create delta package
-        run: |
-          mkdir -p build/temp/changed-sources
-          echo GOOD_SHA: "${{ vars.LAST_GOOD_SHA_DDIQA }}"
-          sf sgd source delta --from "${{ vars.LAST_GOOD_SHA_DDIQA }}" --to "origin/DDIQAGH" \
-            --output-dir build/temp/changed-sources/ --generate-delta --source-dir force-app/ --ignore-file .gitignore
-          find build/temp/changed-sources/ -type d -empty -delete
-          zip -r build/temp/changed-sources.zip build/temp/changed-sources/
-          echo "Contents of package.xml:"
-          cat build/temp/changed-sources/package/package.xml
+    - name: Send Email on Failure
+      if: needs.deploy-on-merge.outputs.deploy_status == 'Failed'
+      uses: uhg-pipelines/epl-send-mail@v1
+      with:
+        subject: "Build Failure - Deployment Failed in QA"
+        to: "${{ steps.pr_author.outputs.email }}"
+        cc: neha_jain@optum.com
+        from: "notifications@github.com"
+        body: |
+          The deployment to QA failed for your PR.
 
-      - name: Upload zip artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: changed-sources
-          path: build/temp/changed-sources.zip
+          Files with errors:
+              ${{ steps.failed_files.outputs.files }}
 
-      - name: Remove destructiveChanges.xml
-        run: |
-          rm -f build/temp/changed-sources/destructiveChanges.xml
-          rm -f build/temp/changed-sources/destructiveChangesPost.xml
-
-      - name: Deploy to Sandbox
-        id: deploy
-        run: |
-          echo "Starting Salesforce Deployment"
-          if ! sf project deploy start \
-            --source-dir build/temp/changed-sources/ \
-            --target-org thisOrg \
-            --wait 360 \
-            --json \
-            --verbose > deploy-result.json 2> deploy-error.log; then
-            if grep -q '"name": "NothingToDeploy"' deploy-result.json; then
-              echo "No changes to deploy. Skipping..."
-              exit 0
-            fi
-            echo "Deployment failed."
-            echo "deploy_status=Failed" >> $GITHUB_OUTPUT
-          else
-            echo "Deployment succeeded."
-            echo "deploy_status=Succeeded" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Upload deployment result
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: deploy-result
-          path: deploy-result.json
-
-  Send_Email_Notification:
-    runs-on: uhg-runner-m
-    environment: DDIQA
-    needs: deploy-on-merge
-    if: always()
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Download deployment result
-        uses: actions/download-artifact@v4
-        with:
-          name: deploy-result
-
-      - name: Extract Error Message
-        id: errors
-        run: |
-          if [[ "${{ needs.deploy-on-merge.outputs.deploy_status }}" == "Failed" ]] && [ -s deploy-result.json ]; then
-            jq -r '.result.details.componentFailures[]?.problem' deploy-result.json \
-              | grep -v null > error-msg.txt || true
-            echo "errors=$(sed ':a;N;$!ba;s/\n/\\n/g' error-msg.txt)" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Extract Failed Files
-        id: failed_files
-        run: |
-          jq -r '.result.details.componentFailures[]?.fileName' deploy-result.json \
-            | grep -v null | sort -u > failed-files.txt || true
-          echo "files=$(paste -sd ',' failed-files.txt)" >> $GITHUB_OUTPUT
-
-      - name: Extract Failed File Authors
-        id: authors
-        if: needs.deploy-on-merge.outputs.deploy_status == 'Failed'
-        run: |
-          touch authors.txt
-          while IFS= read -r file; do
-            git log -1 --pretty=format:'%ae' -- "$file" >> authors.txt || true
-          done < failed-files.txt
-          sort -u authors.txt > unique-authors.txt
-          echo "authors=$(paste -sd ',' unique-authors.txt)" >> $GITHUB_OUTPUT
-
-      - name: Send Email on Failure
-        if: needs.deploy-on-merge.outputs.deploy_status == 'Failed'
-        uses: uhg-pipelines/epl-send-mail@v1
-        with:
-          subject: "Build Failure - Your files caused errors"
-          to: ${{ steps.authors.outputs.authors }}
-          cc: neha_jain@optum.com,chandrasekhar_uppalapati@optum.com
-          from: "notifications@github.com"
-          body: |
-            The deployment to QA failed due to issues in the following files:
-                  ${{ steps.failed_files.outputs.files }}
-      
-            Error details:
-                  ${{ steps.errors.outputs.errors }}
-
-  save_last_good_sha:
-    runs-on: uhg-runner-m
-    environment: DDIQA
-    needs: deploy-on-merge
-    if: needs.deploy-on-merge.outputs.deploy_status == 'Succeeded'
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Update LAST_GOOD_SHA_DDIQA environment variable
-        env:
-          GITHUB_TOKEN: ${{ secrets.PAT_TOKEN }}
-          OWNER: ${{ github.repository_owner }}
-          REPO: ${{ github.event.repository.name }}
-          ENV_NAME: DDIQA
-          VARIABLE_NAME: LAST_GOOD_SHA_DDIQA
-          SHA: ${{ github.event.pull_request.merge_commit_sha || github.sha }}
-        run: |
-          echo "Updating $VARIABLE_NAME in environment $ENV_NAME with SHA=$SHA"
-
-          # Try to update (PATCH)
-          RESPONSE=$(curl -s -o response.json -w "%{http_code}" \
-            -X PATCH \
-            -H "Accept: application/vnd.github+json" \
-            -H "Authorization: Bearer $GITHUB_TOKEN" \
-            https://api.github.com/repos/$OWNER/$REPO/environments/$ENV_NAME/variables/$VARIABLE_NAME \
-            -d "{\"name\":\"$VARIABLE_NAME\",\"value\":\"$SHA\"}")
-
-          if [ "$RESPONSE" -eq 404 ]; then
-            echo "Variable not found, creating instead..."
-            RESPONSE=$(curl -s -o response.json -w "%{http_code}" \
-              -X POST \
-              -H "Accept: application/vnd.github+json" \
-              -H "Authorization: Bearer $GITHUB_TOKEN" \
-              https://api.github.com/repos/$OWNER/$REPO/environments/$ENV_NAME/variables \
-              -d "{\"name\":\"$VARIABLE_NAME\",\"value\":\"$SHA\"}")
-          fi
-
-          if [ "$RESPONSE" -ge 400 ]; then
-            echo "❌ Failed to update/create variable $VARIABLE_NAME"
-            cat response.json
-            exit 1
-          fi
-
-          echo "HTTP Response: $RESPONSE"
-          cat response.json
+          Error details:
+              ${{ steps.errors.outputs.errors }}
