@@ -1,15 +1,10 @@
-- name: Get Authors of Failed Files
-  run: |
-    # Check if repo is shallow
-    if git rev-parse --is-shallow-repository | grep -q "true"; then
-      git fetch --unshallow
-    fi
+name: Trigger DDIQA Deployment from Master
 
-    # Continue with your logic to get authors
-    # Example: Get authors of changed files
-    git diff --name-only HEAD~1 HEAD > changed_files.txt
-    echo "Changed files:"
-    cat changed_files.txt
+on:
+  workflow_dispatch:  # Allows manual trigger
 
-    echo "Authors:"
-    git log --pretty=format:'%an <%ae>' --no-merges -- $(cat changed_files.txt) | sort | uniq
+jobs:
+  call-deploy:
+    uses: your-org/your-repo/.github/workflows/Deploy to DDIQA_Sandbox.yml@DDIQAGH
+    secrets:
+      PAT_TOKEN: ${{ secrets.PAT_TOKEN }}
