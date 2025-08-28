@@ -12,7 +12,7 @@ permissions:
 jobs:
   promote:
     runs-on: uhg-runner-m
-    environment: DDIUATGH   
+    environment: DDIUATGH
     steps:
       - name: Checkout target branch (DDIUATGH)
         uses: actions/checkout@v4
@@ -31,17 +31,101 @@ jobs:
           git remote add source-origin https://x-access-token:${{ secrets.PAT_TOKEN }}@github.com/${{ github.repository }}.git || true
           git fetch source-origin DDIQAGH
 
+      # Track last successful SHA to avoid full repo checks
+      - name: Get last promoted SHA
+        id: get-sha
+        run: |
+          SHA_FILE=.last_promoted_sha
+          if git show origin/DDIUATGH:$SHA_FILE > /dev/null 2>&1; then
+            echo "sha=$(git show origin/DDIUATGH:$SHA_FILE)" >> $GITHUB_OUTPUT
+          else
+            echo "sha=" >> $GITHUB_OUTPUT
+          fi
 
+      - name: Find changed files since last promotion
+        run: |
+          mkdir -p artifacts
+          if [ -n "${{ steps.get-sha.outputs.sha }}" ]; then
+            git diff --name-status ${{ steps.get-sha.outputs.sha }} source-origin/DDIQAGH -- force-app/main/default/ > artifacts/changed_files.txt
+          else
+            git diff --name-status origin/DDIUATGH source-origin/DDIQAGH -- force-app/main/default/ > artifacts/changed_files.txt
+          fi
+          echo "Changed files:"
+          cat artifacts/changed_files.txt
+
+      # Generate package.xml
+      - name: Generate package.xml
+        run: |
+          echo '<?xml version="1.0" encoding="UTF-8"?>' > artifacts/package.xml
+          echo '<Package xmlns="http://soap.sforce.com/2006/04/metadata">' >> artifacts/package.xml
+
+          awk '$1=="A" || $1=="M" {print $2}' artifacts/changed_files.txt | while read FILE; do
+            TYPE=$(echo "$FILE" | sed 's|force-app/main/default/||' | cut -d'/' -f1)
+            MEMBER=$(basename "$FILE" | sed 's|\.[^\.]*$||')
+            echo "$TYPE:$MEMBER" >> artifacts/members.txt
+          done
+
+          if [ -f artifacts/members.txt ]; then
+            for T in $(cut -d: -f1 artifacts/members.txt | sort -u); do
+              echo "  <types>" >> artifacts/package.xml
+              grep "^$T:" artifacts/members.txt | cut -d: -f2 | sort -u | while read M; do
+                echo "    <members>$M</members>" >> artifacts/package.xml
+              done
+              echo "    <name>$T</name>" >> artifacts/package.xml
+              echo "  </types>" >> artifacts/package.xml
+            done
+          fi
+
+          echo "  <version>60.0</version>" >> artifacts/package.xml
+          echo "</Package>" >> artifacts/package.xml
+
+      # Generate destructiveChanges.xml
+      - name: Generate destructiveChanges.xml
+        run: |
+          echo '<?xml version="1.0" encoding="UTF-8"?>' > artifacts/destructiveChanges.xml
+          echo '<Package xmlns="http://soap.sforce.com/2006/04/metadata">' >> artifacts/destructiveChanges.xml
+
+          awk '$1=="D" {print $2}' artifacts/changed_files.txt | while read FILE; do
+            TYPE=$(echo "$FILE" | sed 's|force-app/main/default/||' | cut -d'/' -f1)
+            MEMBER=$(basename "$FILE" | sed 's|\.[^\.]*$||')
+            echo "$TYPE:$MEMBER" >> artifacts/deleted.txt
+          done
+
+          if [ -f artifacts/deleted.txt ]; then
+            for T in $(cut -d: -f1 artifacts/deleted.txt | sort -u); do
+              echo "  <types>" >> artifacts/destructiveChanges.xml
+              grep "^$T:" artifacts/deleted.txt | cut -d: -f2 | sort -u | while read M; do
+                echo "    <members>$M</members>" >> artifacts/destructiveChanges.xml
+              done
+              echo "    <name>$T</name>" >> artifacts/destructiveChanges.xml
+              echo "  </types>" >> artifacts/destructiveChanges.xml
+            done
+          fi
+
+          echo "  <version>60.0</version>" >> artifacts/destructiveChanges.xml
+          echo "</Package>" >> artifacts/destructiveChanges.xml
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: deployment-artifacts
+          path: artifacts/
 
       - name: Merge source into target
         run: |
-          git merge --no-ff --allow-unrelated-histories --strategy=recursive -X theirs source-origin/DDIQAGH \
+          git merge --no-ff --strategy=recursive -X theirs source-origin/DDIQAGH \
             -m "Promote DDIQAGH to DDIUATGH" || {
               echo "⚠️ Merge had conflicts. Auto-resolving in favor of source branch"
               git checkout --theirs .
               git add .
               git commit -m "Auto-resolve merge conflict: favor source branch"
             }
+
+      - name: Update last promoted SHA
+        run: |
+          echo $(git rev-parse source-origin/DDIQAGH) > .last_promoted_sha
+          git add .last_promoted_sha
+          git commit -m "Update last promoted SHA"
 
       - name: Push changes to DDIUATGH
         run: git push origin HEAD:DDIUATGH
