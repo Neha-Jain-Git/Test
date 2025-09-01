@@ -1,84 +1,53 @@
-Send_Email_Notification:
-  runs-on: uhg-runner-m
-  environment: DDIQA
-  needs: deploy-on-merge
-  if: always()
+Perfect 👍 I’ll highlight the exact lines you need to replace in your workflow with bold so it’s easy to spot.
 
-  steps:
-    - name: Download deployment result
-      uses: actions/download-artifact@v4
-      with:
-        name: deploy-result
+Here’s the updated Extract Grouped Errors step with the fix applied:
 
-    - name: Extract Error Message
-      id: errors
-      run: |
-        if [[ "${{ needs.deploy-on-merge.outputs.deploy_status }}" == "Failed" ]]; then
-          jq -r '.result.details.componentFailures[]?.problem' deploy-result.json \
-            | grep -v null > error-msg.txt || true
-          echo "errors=$(sed ':a;N;$!ba;s/\n/\\n/g' error-msg.txt)" >> $GITHUB_OUTPUT
-        fi
+- name: Extract Grouped Errors
+        id: grouped
+        run: |
+          jq -r '.result.details.componentFailures[]? | "\(.fileName): \(.problem)"' deploy-result.json \
+            | grep -v null > file-errors.txt || true
+          
+          if [ -s file-errors.txt ]; then
+            awk -F': ' '
+              {
+                file=$1
+                error=$2
+                if (file != lastFile) {
+                  count++
+                  if (count > 1) print ""
+                  print count ". " file
+                  lastFile=file
+                  errorCount=0
+                }
+                errorCount++
+                print "   " count "." errorCount ") " error
+              }
+            ' file-errors.txt > grouped-errors.txt
+          else
+            echo "No errors found." > grouped-errors.txt
+          fi
 
-    - name: Extract Failed Files
-      id: failed_files
-      run: |
-        jq -r '.result.details.componentFailures[]?.fileName' deploy-result.json \
-          | grep -v null | sort -u > failed-files.txt || true
-        echo "files=$(paste -sd ',' failed-files.txt)" >> $GITHUB_OUTPUT
+          **{**
+          **  echo "grouped<<EOF"**
+          **  cat grouped-errors.txt**
+          **  echo "EOF"**
+          **} >> $GITHUB_OUTPUT**
 
-    - name: Determine requester email
-      id: requester
-      run: |
-        PR_NUMBER=${{ github.event.pull_request.number }}
-        OWNER=${{ github.repository_owner }}
-        REPO=$(echo "${{ github.repository }}" | cut -d'/' -f2)
 
-        # Try to fetch PR requester login
-        LOGIN=$(curl -s -H "Authorization: token ${{ secrets.PAT_TOKEN }}" \
-          "https://api.github.com/repos/$OWNER/$REPO/pulls/$PR_NUMBER" \
-          | jq -r '.user.login')
+---
 
-        EMAIL=""
+🔑 What changed?
 
-        if [ -n "$LOGIN" ] && [ "$LOGIN" != "null" ]; then
-          echo "PR opened by: $LOGIN"
+❌ Removed this line (which caused \n to show in email):
 
-          # Map GitHub login to corporate email
-          case "$LOGIN" in
-            amitkumar) EMAIL="amit.kumar@optum.com" ;;
-            priyasharma) EMAIL="priya.sharma@optum.com" ;;
-            rohitjain) EMAIL="rohit.jain@optum.com" ;;
-            # add mappings for your team here
-            *) EMAIL="" ;;
-          esac
-        fi
+echo "grouped=$(sed ':a;N;$!ba;s/\n/\\n/g' grouped-errors.txt)" >> $GITHUB_OUTPUT
 
-        # Fallback to git log if mapping not found
-        if [ -z "$EMAIL" ]; then
-          echo "Falling back to git log..."
-          EMAIL=$(git log -1 --pretty=format:'%ae')
-        fi
+✅ Replaced with multiline output block (highlighted above with bold).
 
-        if [ -z "$EMAIL" ]; then
-          EMAIL="default-notify@optum.com"
-        fi
 
-        echo "Resolved email: $EMAIL"
-        echo "email=$EMAIL" >> $GITHUB_OUTPUT
 
-    - name: Send Email on Failure
-      if: needs.deploy-on-merge.outputs.deploy_status == 'Failed'
-      uses: uhg-pipelines/epl-send-mail@v1
-      with:
-        subject: "Build Failure - Deployment Failed in QA"
-        to: "${{ steps.requester.outputs.email }}"
-        cc: neha_jain@optum.com
-        from: "notifications@github.com"
-        body: |
-          The deployment to QA failed for your PR.
+---
 
-          Files with errors:
-              ${{ steps.failed_files.outputs.files }}
+Do you also want me to update the email step to format errors with something like <pre> so they preserve alignment nicely in Outlook/Gmail?
 
-          Error details:
-              ${{ steps.errors.outputs.errors }}
