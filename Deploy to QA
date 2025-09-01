@@ -148,6 +148,12 @@ jobs:
         run: |
           jq -r '.result.details.componentFailures[]?.fileName' deploy-result.json \
             | grep -v null | sort -u > failed-files.txt || true
+          if [ -s failed-files.txt ]; then
+            awk '{print NR". " $0}' failed-files.txt > tmp && mv tmp failed-files.txt
+          else
+            echo "No Failed Files" > failed-files.txt
+          fi
+          
           echo "files=$(paste -sd ',' failed-files.txt)" >> $GITHUB_OUTPUT
           echo "files=$(paste -sd ',' failed-files.txt)" 
     
@@ -155,8 +161,8 @@ jobs:
         id: pr_author
         run: |
           AUTHOR_LOGIN="${{ github.event.pull_request.user.login }}"
-          EMAIL=$(curl -s -H "Authorization: Bearer ${{ secrets.PAT_TOKEN }}"\
-          https://api.github.com/users/$AUTHOR_LOGIN |
+          EMAIL=$(curl -s -H "Authorization: Bearer ${{ secrets.PAT_TOKEN }}" \
+          "https://api.github.com/users/$AUTHOR_LOGIN" |
           jq -r '.email')
 
           if [ "$EMAIL" == "null" ] || [ -z "$EMAIL" ]; then
