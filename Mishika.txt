@@ -31,10 +31,10 @@ jobs:
           git remote add source-origin https://x-access-token:${{ secrets.PAT_TOKEN }}@github.com/${{ github.repository }}.git || true
           git fetch source-origin DDIQAGH
 
-      # Get last promoted SHA from environment variable
+      # Get last promoted SHA
       - name: Get last promoted SHA
         id: lastsha
-        run: echo "sha=${{ vars.last_good_sha_ddiuatgh }}" >> $GITHUB_OUTPUT
+        run: echo "sha=${{ vars.LAST_GOOD_SHA_DDIUATGH_MERGE }}" >> $GITHUB_OUTPUT
 
       - name: Find changed files since last promotion
         run: |
@@ -72,8 +72,8 @@ jobs:
       - name: Merge source into target
         run: |
           git merge --no-ff --strategy=recursive -X theirs source-origin/DDIQAGH \
-            -m "Promote DDIQAGH to DDIUATGH" || {
-              echo "⚠️ Merge had conflicts. Auto-resolving in favor of source branch"
+            -m "Merge DDIQAGH to DDIUATGH" || {
+              echo "Merge had conflicts. Auto-resolving in favor of source branch"
               git checkout --theirs .
               git add .
               git commit -m "Auto-resolve merge conflict: favor source branch"
@@ -82,17 +82,17 @@ jobs:
       - name: Push changes to DDIUATGH
         run: git push origin HEAD:DDIUATGH
 
-      - name: Update last_good_sha_ddiuatgh variable
+      - name: Update SHA ID 
         run: |
           NEW_SHA=$(git rev-parse source-origin/DDIQAGH)
           gh api \
             --method PATCH \
             -H "Accept: application/vnd.github+json" \
-            /repos/${{ github.repository }}/environments/DDIUATGH/variables/last_good_sha_ddiuatgh \
-            -f name="last_good_sha_ddiuatgh" \
+            /repos/${{ github.repository }}/environments/DDIUATGH/variables/LAST_GOOD_SHA_DDIUATGH_MERGE \
+            -f name="LAST_GOOD_SHA_DDIUATGH_MERGE" \
             -f value="$NEW_SHA"
         env:
           GITHUB_TOKEN: ${{ secrets.PAT_TOKEN }}
 
       - name: Success message
-        run: echo "🎉 Successfully promoted DDIQAGH to DDIUATGH and updated last_good_sha_ddiuatgh"
+        run: echo "Successfully Merged DDIQAGH to DDIUATGH"
