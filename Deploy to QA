@@ -1,15 +1,25 @@
-# This GitHub Actions workflow deploys changes to the sandbox environment.
-# It is triggered manually via repository_dispatch.
-# The repository_dispatch event triggers only if the code resides in the default branchd.
-# Pull requests merged by bots may not trigger workflows as intended. Using repository_dispatch ensures workflows are manually triggered and executed reliably.
-# 
-# Using a Personal Access Token (PAT) instead of the default GITHUB_TOKEN due to insufficient permissions for updating repository or environment variables.
+# -------------------------------------------------------------
+# Salesforce Deployment Workflow (MALTSSQA Sandbox)
+# -------------------------------------------------------------
+# Purpose:
+#   - Deploy changes to the MALTSSQA sandbox after PR merge.
+#   - Triggered on pull_request closure (merge to MALTSSQA branch) 
+#     or manually via workflow_dispatch.
+#
+# Why repository_dispatch was used earlier:
+#   - Some bot merges or GITHUB_TOKEN limitations may skip workflows. 
+#   - Using a Personal Access Token (PAT) gives required permissions 
+#     for updating environment variables and ensuring reliability.
+#
+# Flow:
+#   1. Checkout code
+#   2. Create delta package (sfdx-git-delta)
+#   3. Deploy to Salesforce Sandbox
+#   4. Send email notification if deployment fails (grouped by file)
+#   5. Save last successful SHA on successful deploy
+# -------------------------------------------------------------
+
 on:
-  #push:
-    #branches:
-      #- MALTSSQA
-    #paths:
-      #- 'force-app/main/default/**'
   pull_request:
     types: [closed]
     branches:
@@ -52,6 +62,7 @@ jobs:
           echo "$HOME/sfdx/bin" >> $GITHUB_PATH
           export PATH=$HOME/sfdx/bin:$PATH
           sf version
+
       - name: Populate auth file with SF_AUTH secret
         run: |
           echo "${{ secrets.SF_MALTSSQA_AUTH_URL }}" > ./AUTHURL.txt
@@ -59,6 +70,7 @@ jobs:
             echo "Missing AUTHURL secret"
             exit 1
           fi
+
       - name: Authenticate to the Org
         run: sf org login sfdx-url --sfdx-url-file ./AUTHURL.txt --set-default --alias thisOrg
 
@@ -76,8 +88,8 @@ jobs:
 
       - name: Display package.xml
         run: |
-            echo "Contents of package.xml:"
-            cat build/temp/changed-sources/package/package.xml
+          echo "Contents of package.xml:"
+          cat build/temp/changed-sources/package/package.xml
           
       - name: Upload zip artifact
         uses: actions/upload-artifact@v4
@@ -89,7 +101,6 @@ jobs:
         run: |
           cat build/temp/changed-sources/destructiveChanges/destructiveChanges.xml
           rm -f build/temp/changed-sources/destructiveChanges/destructiveChanges.xml
-          #rm -f build/temp/changed-sources/destructiveChangesPost.xml
           
       - name: Deploy to Sandbox
         id: deploy
@@ -135,28 +146,34 @@ jobs:
         with:
           name: deploy-result
 
-      - name: Extract Error Message
-        id: errors
+      - name: Extract Grouped Errors
+        id: grouped
         run: |
-          if [[ "${{ needs.deploy-on-merge.outputs.deploy_status }}" == "Failed" ]]; then
-            jq -r '.result.details.componentFailures[]?.problem' deploy-result.json \
-              | grep -v null > error-msg.txt || true
-            echo "errors=$(sed ':a;N;$!ba;s/\n/\\n/g' error-msg.txt)" >> $GITHUB_OUTPUT
-          fi
-      - name: Extract Failed Files
-        id: failed_files
-        run: |
-          jq -r '.result.details.componentFailures[]?.fileName' deploy-result.json \
-            | grep -v null | sort -u > failed-files.txt || true
-          if [ -s failed-files.txt ]; then
-            awk '{print NR". " $0}' failed-files.txt > tmp && mv tmp failed-files.txt
-          else
-            echo "No Failed Files" > failed-files.txt
-          fi
+          jq -r '.result.details.componentFailures[]? | "\(.fileName): \(.problem)"' deploy-result.json \
+            | grep -v null > file-errors.txt || true
           
-          echo "files=$(paste -sd ',' failed-files.txt)" >> $GITHUB_OUTPUT
-          echo "files=$(paste -sd ',' failed-files.txt)" 
-    
+          if [ -s file-errors.txt ]; then
+            awk -F': ' '
+              {
+                file=$1
+                error=$2
+                if (file != lastFile) {
+                  count++
+                  if (count > 1) print ""
+                  print count ". " file
+                  lastFile=file
+                  errorCount=0
+                }
+                errorCount++
+                print "   " count "." errorCount ") " error
+              }
+            ' file-errors.txt > grouped-errors.txt
+          else
+            echo "No errors found." > grouped-errors.txt
+          fi
+
+          echo "grouped=$(sed ':a;N;$!ba;s/\n/\\n/g' grouped-errors.txt)" >> $GITHUB_OUTPUT
+
       - name: Map PR requester to email
         id: pr_author
         run: |
@@ -172,7 +189,6 @@ jobs:
           echo "Email: $EMAIL"
           echo "email=$EMAIL" >> $GITHUB_OUTPUT
 
-            
       - name: Send Email on Failure
         if: needs.deploy-on-merge.outputs.deploy_status == 'Failed'
         uses: uhg-pipelines/epl-send-mail@v1
@@ -182,11 +198,9 @@ jobs:
           cc: neha_jain@optum.com
           from: "notifications@github.com"
           body: |
-            The deployment to QA failed due to issues in the following files:
-                  ${{ steps.failed_files.outputs.files }}
-      
-            Error details:
-                  ${{ steps.errors.outputs.errors }}
+            The deployment to QA failed due to the following issues:
+            
+            ${{ steps.grouped.outputs.grouped }}
 
   save_last_good_sha:
     runs-on: uhg-runner-m
