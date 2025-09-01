@@ -10,7 +10,7 @@ permissions:
   actions: write
 
 jobs:
-  promote:
+  Merge:
     runs-on: uhg-runner-m
     environment: DDIUATGH
     steps:
@@ -31,8 +31,8 @@ jobs:
           git remote add source-origin https://x-access-token:${{ secrets.PAT_TOKEN }}@github.com/${{ github.repository }}.git || true
           git fetch source-origin DDIQAGH
 
-      # Get last promoted SHA
-      - name: Get last promoted SHA
+      # Get last merged SHA
+      - name: Get last merged SHA
         id: lastsha
         run: echo "sha=${{ vars.LAST_GOOD_SHA_DDIUATGH_MERGE }}" >> $GITHUB_OUTPUT
 
@@ -109,4 +109,4 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.PAT_TOKEN }}
 
       - name: Success message
-        run: echo "✅ Successfully promoted changes (without deletions) from DDIQAGH → DDIUATGH"
+        run: echo "Successfully merged changes from DDIQAGH → DDIUATGH"
