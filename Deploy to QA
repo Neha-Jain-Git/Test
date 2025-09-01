@@ -5,15 +5,17 @@
 # 
 # Using a Personal Access Token (PAT) instead of the default GITHUB_TOKEN due to insufficient permissions for updating repository or environment variables.
 on:
-  push:
-    branches:
-      - MALTSSQA
-    paths:
-      - 'force-app/main/default/**'
+  #push:
+    #branches:
+      #- MALTSSQA
+    #paths:
+      #- 'force-app/main/default/**'
   pull_request:
     types: [closed]
     branches:
       - MALTSSQA
+    paths:
+      - 'force-app/main/default/**'
   workflow_dispatch:
   
 permissions:
@@ -29,7 +31,7 @@ env:
 
 jobs:
   deploy-on-merge:
-    #if: github.event.pull_request.merged == true && github.event.pull_request.base.ref == 'MALTSSQA'
+    if: github.event.pull_request.merged == true && github.event.pull_request.base.ref == 'MALTSSQA'
     runs-on: uhg-runner-m
     environment: MALTSSQA
 
@@ -152,23 +154,18 @@ jobs:
       - name: Map PR requester to email
         id: pr_author
         run: |
-          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
-            REQUESTER=${{ github.event.pull_request.user.login }}
-          else
-            # fallback if it’s a push (protected branch normally prevents this)
-            REQUESTER="unknown"
+          AUTHOR_LOGIN="${{ github.event.pull_request.user.login }}"
+          EMAIL=$(curl -s -H "Authorization: Bearer ${{ secrets.PAT_TOKEN }}"\
+          https://api.github.com/users/$AUTHOR_LOGIN |
+          jq -r '.email')
+
+          if [ "$EMAIL" == "null" ] || [ -z "$EMAIL" ]; then
+             EMAIL="default-notify@optum.com"
           fi
-  
-          echo "PR opened by: $REQUESTER"
-  
-          case "$REQUESTER" in
-            neha-jain) EMAIL="neha_jain@optum.com" ;;
-            john-doe)  EMAIL="john.doe@optum.com" ;;
-            # add mappings for all GitHub usernames here
-            *) EMAIL="default-notify@optum.com" ;;
-          esac
-  
+          echo "PR Author: $AUTHOR_LOGIN"
+          echo "Email: $EMAIL"
           echo "email=$EMAIL" >> $GITHUB_OUTPUT
+
             
       - name: Send Email on Failure
         if: needs.deploy-on-merge.outputs.deploy_status == 'Failed'
@@ -176,7 +173,7 @@ jobs:
         with:
           subject: "Build Failure - Your files caused errors"
           to: "${{ steps.pr_author.outputs.email }}"
-          cc: neha_jain@optum.com, brajesh_tiwary@optum.com, chandrasekhar_uppalapati@optum.com, gopal_shakti@optum.com, shikha_devi@optum.com
+          cc: neha_jain@optum.com
           from: "notifications@github.com"
           body: |
             The deployment to QA failed due to issues in the following files:
