@@ -1,105 +1,112 @@
-name: Merge to DDIUATGH
+name: Merge DDIQAGH to DDIUATGH
+
 on:
   workflow_dispatch:
 
 permissions:
   contents: write
+  pull-requests: write
+  checks: read
+  actions: write
 
 jobs:
   promote:
     runs-on: uhg-runner-m
+    environment: DDIUATGH
     steps:
-      - name: Checkout target branch (UAT)
+      - name: Checkout target branch (DDIUATGH)
         uses: actions/checkout@v4
         with:
           ref: DDIUATGH
           token: ${{ secrets.PAT_TOKEN }}
+          fetch-depth: 0
 
       - name: Configure Git
         run: |
           git config user.email "maltss_tech@optum.com"
           git config user.name "maltssdeploy"
 
-      - name: Fetch source branch (QA)
-        run: git fetch origin DDIQAGH
+      - name: Add remote and fetch source branch (DDIQAGH)
+        run: |
+          git remote add source-origin https://x-access-token:${{ secrets.PAT_TOKEN }}@github.com/${{ github.repository }}.git || true
+          git fetch source-origin DDIQAGH
 
+      # Get last promoted SHA
       - name: Get last promoted SHA
         id: lastsha
-        run: |
-          LAST_SHA="${{ vars.LAST_PROMOTED_UAT_SHA }}"
-          if [ -z "$LAST_SHA" ]; then
-            echo "No previous SHA found, defaulting to first commit."
-            LAST_SHA=$(git rev-list origin/DDIQAGH | tail -n 1)
-          fi
-          echo "last_sha=$LAST_SHA" >> $GITHUB_OUTPUT
+        run: echo "sha=${{ vars.LAST_GOOD_SHA_DDIUATGH_MERGE }}" >> $GITHUB_OUTPUT
 
-      - name: Copy only folder changes
+      - name: Find changed files since last promotion
         id: changes
         run: |
-          CHANGED_FILES=$(git diff --name-only ${{ steps.lastsha.outputs.last_sha }} origin/DDIQAGH -- force-app/main/default/)
-          if [ -z "$CHANGED_FILES" ]; then
-            echo "No changes detected in force-app/main/default, skipping commit."
-            exit 0
+          mkdir -p artifacts
+          if [ -n "${{ steps.lastsha.outputs.sha }}" ]; then
+            git diff --name-status ${{ steps.lastsha.outputs.sha }} source-origin/DDIQAGH -- force-app/main/default/ > artifacts/changed_files.txt
+          else
+            git diff --name-status origin/DDIUATGH source-origin/DDIQAGH -- force-app/main/default/ > artifacts/changed_files.txt
           fi
+          echo "Changed files:"
+          cat artifacts/changed_files.txt
 
-          echo "$CHANGED_FILES" > changed_files.txt
-          git checkout origin/DDIQAGH -- $CHANGED_FILES
-          git add $CHANGED_FILES
-          git commit -m "Delta promote force-app/main/default from DDIQAGH to DDIUATGH"
-
-      - name: Generate package.xml
+      - name: Generate package.xml and destructiveChanges.xml
         run: |
-          echo '<?xml version="1.0" encoding="UTF-8"?>' > package.xml
-          echo '<Package xmlns="http://soap.sforce.com/2006/04/metadata">' >> package.xml
-          declare -A TYPES
+          mkdir -p artifacts
 
-          while read FILE; do
-            META_PATH=${FILE#force-app/main/default/}
-            META_TYPE=$(dirname "$META_PATH")
-            META_NAME=$(basename "$META_PATH" .xml)
+          # package.xml (only A/M files)
+          echo '<?xml version="1.0" encoding="UTF-8"?>' > artifacts/package.xml
+          echo '<Package xmlns="http://soap.sforce.com/2006/04/metadata">' >> artifacts/package.xml
+          awk '$1 != "D" {print "  <!-- " $0 " -->"}' artifacts/changed_files.txt >> artifacts/package.xml
+          echo '  <version>59.0</version>' >> artifacts/package.xml
+          echo '</Package>' >> artifacts/package.xml
 
-            # Map folder to MetadataType (expand as needed)
-            case $META_TYPE in
-              classes) TYPE="ApexClass";;
-              triggers) TYPE="ApexTrigger";;
-              lwc) TYPE="LightningComponentBundle";;
-              aura) TYPE="AuraDefinitionBundle";;
-              objects*) TYPE="CustomObject";;
-              labels) TYPE="CustomLabels";;
-              layouts) TYPE="Layout";;
-              *) TYPE="Unknown";;
-            esac
-
-            if [ "$TYPE" != "Unknown" ]; then
-              TYPES[$TYPE]="${TYPES[$TYPE]}<members>${META_NAME}</members>"
-            fi
-          done < changed_files.txt
-
-          for TYPE in "${!TYPES[@]}"; do
-            echo "  <types>" >> package.xml
-            echo "    ${TYPES[$TYPE]}" >> package.xml
-            echo "    <name>${TYPE}</name>" >> package.xml
-            echo "  </types>" >> package.xml
-          done
-
-          echo "  <version>60.0</version>" >> package.xml
-          echo "</Package>" >> package.xml
+          # destructiveChanges.xml (only deletions)
+          echo '<?xml version="1.0" encoding="UTF-8"?>' > artifacts/destructiveChanges.xml
+          echo '<Package xmlns="http://soap.sforce.com/2006/04/metadata">' >> artifacts/destructiveChanges.xml
+          awk '$1 == "D" {print "  <!-- " $0 " -->"}' artifacts/changed_files.txt >> artifacts/destructiveChanges.xml
+          echo '</Package>' >> artifacts/destructiveChanges.xml
 
           echo "Generated package.xml:"
-          cat package.xml
+          cat artifacts/package.xml
+          echo "Generated destructiveChanges.xml:"
+          cat artifacts/destructiveChanges.xml
 
-      - name: Upload package.xml as artifact
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
-          name: delta-package
-          path: package.xml
+          name: delta-artifacts
+          path: artifacts/*
 
-      - name: Push changes
+      - name: Copy changes (skip deletions)
+        run: |
+          while read status file; do
+            if [ "$status" = "A" ] || [ "$status" = "M" ]; then
+              mkdir -p "$(dirname "$file")"
+              git show "source-origin/DDIQAGH:$file" > "$file"
+            fi
+          done < artifacts/changed_files.txt
+
+      - name: Commit merged changes
+        run: |
+          git add force-app/main/default
+          if git diff --cached --quiet; then
+            echo "No non-deletion changes to commit."
+          else
+            git commit -m "Promote changes from DDIQAGH to DDIUATGH (skip deletions)"
+          fi
+
+      - name: Push changes to DDIUATGH
         run: git push origin HEAD:DDIUATGH
 
-      - name: Save new promoted SHA
+      - name: Update SHA ID 
         run: |
-          NEW_SHA=$(git rev-parse origin/DDIQAGH)
-          gh variable set LAST_PROMOTED_UAT_SHA --body "$NEW_SHA"
+          NEW_SHA=$(git rev-parse source-origin/DDIQAGH)
+          gh api \
+            --method PATCH \
+            -H "Accept: application/vnd.github+json" \
+            /repos/${{ github.repository }}/environments/DDIUATGH/variables/LAST_GOOD_SHA_DDIUATGH_MERGE \
+            -f name="LAST_GOOD_SHA_DDIUATGH_MERGE" \
+            -f value="$NEW_SHA"
         env:
-          GH_TOKEN: ${{ secrets.PAT_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.PAT_TOKEN }}
+
+      - name: Success message
+        run: echo "✅ Successfully promoted changes (without deletions) from DDIQAGH → DDIUATGH"
