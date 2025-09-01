@@ -69,15 +69,19 @@ jobs:
           name: delta-artifacts
           path: artifacts/*
 
-      - name: Merge source into target
+      # ⬇️ NEW: Replace full merge with path-specific promotion
+      - name: Checkout only force-app/main/default from DDIQAGH
         run: |
-          git merge --no-ff --strategy=recursive -X theirs source-origin/DDIQAGH \
-            -m "Merge DDIQAGH to DDIUATGH" || {
-              echo "Merge had conflicts. Auto-resolving in favor of source branch"
-              git checkout --theirs .
-              git add .
-              git commit -m "Auto-resolve merge conflict: favor source branch"
-            }
+          git checkout source-origin/DDIQAGH -- force-app/main/default
+
+      - name: Commit changes (if any)
+        run: |
+          if [ -n "$(git status --porcelain)" ]; then
+            git add force-app/main/default
+            git commit -m "Promote force-app/main/default from DDIQAGH to DDIUATGH"
+          else
+            echo "No changes to commit"
+          fi
 
       - name: Push changes to DDIUATGH
         run: git push origin HEAD:DDIUATGH
@@ -95,4 +99,4 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.PAT_TOKEN }}
 
       - name: Success message
-        run: echo "Successfully Merged DDIQAGH to DDIUATGH"
+        run: echo "✅ Successfully promoted force-app/main/default from DDIQAGH to DDIUATGH"
