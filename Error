@@ -1,0 +1,23 @@
+Run AUTHOR_LOGIN="njain95_uhg"
+  AUTHOR_LOGIN="njain95_uhg"
+  EMAIL=$(curl -s -H "Authorization: ***"\
+  https://api.github.com/users/$AUTHOR_LOGIN |
+  jq -r '.email')
+  
+  if [ "$EMAIL" == "null" ] || [ -z "$EMAIL" ]; then
+     EMAIL="default-notify@optum.com"
+  fi
+  echo "PR Author: $AUTHOR_LOGIN"
+  echo "Email: $EMAIL"
+  echo "email=$EMAIL" >> $GITHUB_OUTPUT
+  
+    
+  shell: /usr/bin/bash -e {0}
+  env:
+    environment: MALTSSQA
+    SF_MALTSSQA_AUTH_URL: ***
+    PAT_TOKEN: ***
+curl: (2) no URL specified
+curl: try 'curl --help' or 'curl --manual' for more information
+PR Author: njain95_uhg
+Email: default-notify@optum.com
