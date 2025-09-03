@@ -1,53 +1,32 @@
-Perfect 👍 I’ll highlight the exact lines you need to replace in your workflow with bold so it’s easy to spot.
+name: Merge DDIQAGH to DDIUATGH
 
-Here’s the updated Extract Grouped Errors step with the fix applied:
+on:
+  workflow_dispatch:
 
-- name: Extract Grouped Errors
-        id: grouped
+permissions:
+  contents: write   # needed for pushing changes
+
+jobs:
+  merge:
+    runs-on: uhg-runner-m   # self-hosted runner
+    steps:
+      - name: Checkout target branch (DDIUATGH)
+        uses: actions/checkout@v4
+        with:
+          ref: DDIUATGH
+          token: ${{ secrets.PAT_TOKEN }}
+          fetch-depth: 0   # important to get full history
+
+      - name: Configure Git
         run: |
-          jq -r '.result.details.componentFailures[]? | "\(.fileName): \(.problem)"' deploy-result.json \
-            | grep -v null > file-errors.txt || true
-          
-          if [ -s file-errors.txt ]; then
-            awk -F': ' '
-              {
-                file=$1
-                error=$2
-                if (file != lastFile) {
-                  count++
-                  if (count > 1) print ""
-                  print count ". " file
-                  lastFile=file
-                  errorCount=0
-                }
-                errorCount++
-                print "   " count "." errorCount ") " error
-              }
-            ' file-errors.txt > grouped-errors.txt
-          else
-            echo "No errors found." > grouped-errors.txt
-          fi
+          git config user.email "maltss_tech@optum.com"
+          git config user.name "maltssdeploy"
 
-          **{**
-          **  echo "grouped<<EOF"**
-          **  cat grouped-errors.txt**
-          **  echo "EOF"**
-          **} >> $GITHUB_OUTPUT**
+      - name: Fetch source branch (DDIQAGH)
+        run: |
+          git fetch origin DDIQAGH
 
-
----
-
-🔑 What changed?
-
-❌ Removed this line (which caused \n to show in email):
-
-echo "grouped=$(sed ':a;N;$!ba;s/\n/\\n/g' grouped-errors.txt)" >> $GITHUB_OUTPUT
-
-✅ Replaced with multiline output block (highlighted above with bold).
-
-
-
----
-
-Do you also want me to update the email step to format errors with something like <pre> so they preserve alignment nicely in Outlook/Gmail?
-
+      - name: Merge DDIQAGH into DDIUATGH
+        run: |
+          git merge origin/DDIQAGH --no-edit || exit 1
+          git push origin DDIUATGH
