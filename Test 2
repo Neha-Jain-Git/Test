@@ -1,89 +1,35 @@
 name: Merge DDIQAGH to DDIUATGH
 
 on:
-  workflow_dispatch:
-    inputs:
-      auto_merge_pr:
-        description: "If a PR is created (due to conflicts), attempt auto-merge when checks pass"
-        required: false
-        default: "false"
-      pr_title_suffix:
-        description: "Optional PR title suffix (e.g., date or reason)"
-        required: false
-        default: ""
+  workflow_dispatch:   # Run manually from GitHub Actions tab
 
 permissions:
-  contents: write        # required to push/merge
-  pull-requests: write   # required to open PRs
-
-concurrency:
-  group: merge-ddiqagh-to-ddiuatgh
-  cancel-in-progress: false
+  contents: write
 
 jobs:
   merge:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          fetch-depth: 0   # fetch all branches and history
 
       - name: Configure Git
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-      # ---- Attempt direct merge (fast path) ----
-      - name: Try direct merge (DDIQAGH -> DDIUATGH)
-        id: direct_merge
-        uses: peter-evans/merge-branch@v4
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          head_branch: DDIQAGH
-          base_branch: DDIUATGH
-          commit_message: "chore: merge DDIQAGH into DDIUATGH via GH Action"
-          merge_method: merge   # options: merge, squash, rebase
-          allow_ff: true
-          # If conflicts exist, this step exits non-zero.
-
-      - name: Direct merge result
-        if: ${{ steps.direct_merge.outcome == 'success' }}
-        run: echo "✅ Direct merge completed successfully."
-
-      # ---- Fallback: open or update a PR if direct merge failed ----
-      - name: Create/Update PR (fallback when conflicts)
-        if: ${{ steps.direct_merge.outcome != 'success' }}
-        id: cpr
-        uses: peter-evans/create-pull-request@v6
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          title: "Merge DDIQAGH into DDIUATGH ${{ inputs.pr_title_suffix }}"
-          body: |
-            This PR was auto-created because a direct merge of **DDIQAGH ➜ DDIUATGH** had conflicts.
-            - Source: `DDIQAGH`
-            - Target: `DDIUATGH`
-            - Action: Please resolve conflicts and merge.
-          branch: chore/merge-DDIQAGH-into-DDIUATGH
-          base: DDIUATGH
-          labels: |
-            automated
-            merge-from-DDIQAGH
-          delete-branch: false
-          # We create a synthetic commit so the PR exists even if no file changes are staged yet
-          add-paths: |
-            .
-          commit-message: "chore: prepare PR to merge DDIQAGH into DDIUATGH (conflicts present)"
-
-      - name: PR URL
-        if: ${{ steps.direct_merge.outcome != 'success' }}
-        run: echo "⚠️ Conflicts detected. Open PR: ${{ steps.cpr.outputs.pull-request-url }}"
-
-      # ---- Optional: attempt to auto-merge the PR when checks pass ----
-      - name: Enable auto-merge on PR
-        if: ${{ steps.direct_merge.outcome != 'success' && inputs.auto_merge_pr == 'true' && steps.cpr.outputs.pull-request-number }}
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Fetch branches
         run: |
-          # Requires the repo to allow auto-merge; otherwise this no-ops
-          gh pr merge ${{ steps.cpr.outputs.pull-request-number }} --merge --auto
+          git fetch origin DDIQAGH
+          git fetch origin DDIUATGH
+
+      - name: Checkout target branch (DDIUATGH)
+        run: git checkout DDIUATGH
+
+      - name: Merge source branch (DDIQAGH -> DDIUATGH)
+        run: |
+          set -e
+          git merge origin/DDIQAGH --no-edit
+          git push origin DDIUATGH
