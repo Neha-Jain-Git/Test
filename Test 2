@@ -1,173 +1,89 @@
-name: Deploy to DDIQA_Sandbox
+name: Merge DDIQAGH to DDIUATGH
 
 on:
-  push:
-    branches:
-      - "DDIQAGH"
   workflow_dispatch:
+    inputs:
+      auto_merge_pr:
+        description: "If a PR is created (due to conflicts), attempt auto-merge when checks pass"
+        required: false
+        default: "false"
+      pr_title_suffix:
+        description: "Optional PR title suffix (e.g., date or reason)"
+        required: false
+        default: ""
 
 permissions:
-  contents: write
-  pull-requests: write
-  checks: read
-  actions: write
+  contents: write        # required to push/merge
+  pull-requests: write   # required to open PRs
 
-env:
-  environment: DDIQA
-  SF_DDIQA_AUTH_URL: ${{ secrets.SF_DDIQA_AUTH_URL }}
-  PAT_TOKEN: ${{ secrets.PAT_TOKEN }}
+concurrency:
+  group: merge-ddiqagh-to-ddiuatgh
+  cancel-in-progress: false
 
 jobs:
-  deploy-on-merge:
-    runs-on: uhg-runner-m
-    environment: DDIQA
-
-    outputs:
-      deploy_status: ${{ steps.deploy.outputs.deploy_status }}
-
+  merge:
+    runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
+      - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Install Salesforce CLI
+      - name: Configure Git
         run: |
-          wget https://developer.salesforce.com/media/salesforce-cli/sf/channels/stable/sf-linux-x64.tar.xz
-          mkdir ~/sfdx
-          tar xJf sf-linux-x64.tar.xz -C ~/sfdx --strip-components 1
-          echo "$HOME/sfdx/bin" >> $GITHUB_PATH
-          export PATH=$HOME/sfdx/bin:$PATH
-          sf version
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-      - name: Populate auth file with SF_AUTH secret
-        shell: bash
-        run: |
-          echo "${{ secrets.SF_DDIQA_AUTH_URL }}" > ./AUTHURL.txt
-          if [ $(wc -c < ./AUTHURL.txt) -le 1 ]; then
-            echo "Missing AUTHURL secret. Is this workflow running on a fork?"
-            exit 1
-          fi
-
-      - name: Authenticate to the Org
-        run: |
-          sf org login sfdx-url --sfdx-url-file ./AUTHURL.txt --set-default --alias thisOrg
-          rm -f ./AUTHURL.txt
-
-      - name: Install sfdx git delta
-        run: |
-          echo y | sf plugins install sfdx-git-delta
-          sf plugins
-
-      - name: Create delta package for new and modified metadata
-        run: |
-          mkdir -p build/temp/changed-sources
-          echo "LAST_GOOD_SHA_DDIQA: ${{ vars.LAST_GOOD_SHA_DDIQA }}"
-          sf sgd source delta --from "${{ vars.LAST_GOOD_SHA_DDIQA }}" --to "origin/DDIQAGH" --output-dir build/temp/changed-sources/ --generate-delta --source-dir force-app/ --ignore-file .gitignore
-
-      - name: Delete empty directories
-        run: find build/temp/changed-sources/ -type d -empty -delete
-
-      - name: Create zip artifacts
-        run: zip -r build/temp/changed-sources.zip build/temp/changed-sources/
-
-      - name: Upload zip artifact
-        uses: actions/upload-artifact@v4
+      # ---- Attempt direct merge (fast path) ----
+      - name: Try direct merge (DDIQAGH -> DDIUATGH)
+        id: direct_merge
+        uses: peter-evans/merge-branch@v4
         with:
-          name: changed-sources
-          path: build/temp/changed-sources.zip
+          token: ${{ secrets.GITHUB_TOKEN }}
+          head_branch: DDIQAGH
+          base_branch: DDIUATGH
+          commit_message: "chore: merge DDIQAGH into DDIUATGH via GH Action"
+          merge_method: merge   # options: merge, squash, rebase
+          allow_ff: true
+          # If conflicts exist, this step exits non-zero.
 
-      - name: List delta contents
-        run: ls -R build/temp/changed-sources/
+      - name: Direct merge result
+        if: ${{ steps.direct_merge.outcome == 'success' }}
+        run: echo "✅ Direct merge completed successfully."
 
-      - name: Deploy to Sandbox
-        id: deploy
-        run: |
-          sf project deploy start --source-dir "build/temp/changed-sources/" --target-org thisOrg --wait 360 --json --verbose > deploy-result.json
-          STATUS=$(jq -r '.result.status' deploy-result.json)
-          echo "deploy_status=$STATUS" >> $GITHUB_OUTPUT
-
-  Send_Email_Notification:
-    runs-on: uhg-runner-m
-    environment: DDIQA
-    needs: deploy-on-merge
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      # ---- Fallback: open or update a PR if direct merge failed ----
+      - name: Create/Update PR (fallback when conflicts)
+        if: ${{ steps.direct_merge.outcome != 'success' }}
+        id: cpr
+        uses: peter-evans/create-pull-request@v6
         with:
-          fetch-depth: 0
-
-      - name: Extract Error Message
-        id: errors
-        run: |
-          if [[ "${{ needs.deploy-on-merge.outputs.deploy_status }}" == "Failed" ]]; then
-            jq -r '.result.details.componentFailures[]?.problem' deploy-result.json > error-msg.txt || echo "No errors found"
-            echo "errors=$(cat error-msg.txt | sed ':a;N;$!ba;s/\n/\\n/g')" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Get Authors of Changed Files
-        id: authors
-        run: |
-          git fetch origin DDIQAGH
-          git log ${{ vars.LAST_GOOD_SHA_DDIQA }}..HEAD --pretty=format:"%an <%ae>" | sort | uniq > authors.txt
-          echo "emails=$(paste -sd ',' authors.txt)" >> $GITHUB_OUTPUT
-
-      - name: Send Email on Failure
-        if: needs.deploy-on-merge.outputs.deploy_status == 'Failed'
-        uses: uhg-pipelines/epl-send-mail@v1
-        with:
-          subject: "Build Failure"
-          to: "${{ steps.authors.outputs.emails }}"
-          from: "notifications@github.com"
+          token: ${{ secrets.GITHUB_TOKEN }}
+          title: "Merge DDIQAGH into DDIUATGH ${{ inputs.pr_title_suffix }}"
           body: |
-            The deployment to QA failed with the following error(s):
-            ${{ steps.errors.outputs.errors }}
+            This PR was auto-created because a direct merge of **DDIQAGH ➜ DDIUATGH** had conflicts.
+            - Source: `DDIQAGH`
+            - Target: `DDIUATGH`
+            - Action: Please resolve conflicts and merge.
+          branch: chore/merge-DDIQAGH-into-DDIUATGH
+          base: DDIUATGH
+          labels: |
+            automated
+            merge-from-DDIQAGH
+          delete-branch: false
+          # We create a synthetic commit so the PR exists even if no file changes are staged yet
+          add-paths: |
+            .
+          commit-message: "chore: prepare PR to merge DDIQAGH into DDIUATGH (conflicts present)"
 
-      - name: Notify if Build is Now Fixed
-        if: needs.deploy-on-merge.outputs.deploy_status == 'Succeeded'
-        uses: uhg-pipelines/epl-send-mail@v1
-        with:
-          subject: "Build is back to normal"
-          to: "${{ steps.authors.outputs.emails }}"
-          from: "notifications@github.com"
-          body: |
-            The latest build to QA succeeded. The issue is now resolved.
+      - name: PR URL
+        if: ${{ steps.direct_merge.outcome != 'success' }}
+        run: echo "⚠️ Conflicts detected. Open PR: ${{ steps.cpr.outputs.pull-request-url }}"
 
-  save_last_good_sha:
-    runs-on: uhg-runner-m
-    environment: DDIQA
-    needs: deploy-on-merge
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Save last good SHA
-        run: echo "LAST_GOOD_SHA_DDIQA=$(git rev-parse HEAD)" >> $GITHUB_ENV
-
-      - name: Update LAST_GOOD_SHA_DDIQA in Environment
+      # ---- Optional: attempt to auto-merge the PR when checks pass ----
+      - name: Enable auto-merge on PR
+        if: ${{ steps.direct_merge.outcome != 'success' && inputs.auto_merge_pr == 'true' && steps.cpr.outputs.pull-request-number }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          set -e
-          OWNER=${{ github.repository_owner }}
-          REPO=$(echo "${{ github.repository }}" | cut -d'/' -f2)
-          ENVIRONMENT="${{ env.environment }}"
-          VARIABLE_NAME="LAST_GOOD_SHA_DDIQA"
-          NEW_VALUE=$(git rev-parse HEAD)
-
-          echo "Updating $VARIABLE_NAME to $NEW_VALUE for environment $ENVIRONMENT"
-          RESPONSE=$(curl -s -o response.json -w "%{http_code}" -X PATCH \
-            -H "Authorization: token ${{ secrets.PAT_TOKEN }}" \
-            -H "Accept: application/vnd.github+json" \
-            https://api.github.com/repos/$OWNER/$REPO/environments/$ENVIRONMENT/variables/$VARIABLE_NAME \
-            -d "{\"name\":\"$VARIABLE_NAME\",\"value\":\"$NEW_VALUE\"}")
-
-          if [[ "$RESPONSE" -ge 200 && "$RESPONSE" -lt 300 ]]; then
-            echo "✅ Successfully updated $VARIABLE_NAME."
-          else
-            echo "❌ Failed to update $VARIABLE_NAME. HTTP status: $RESPONSE"
-            cat response.json
-            exit 1
-          fi
+          # Requires the repo to allow auto-merge; otherwise this no-ops
+          gh pr merge ${{ steps.cpr.outputs.pull-request-number }} --merge --auto
