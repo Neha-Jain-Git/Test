@@ -1,0 +1,112 @@
+name: Merge MALTSSQA to RELEASE
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  checks: read
+  actions: write
+
+jobs:
+  Merge:
+    runs-on: uhg-runner-m
+    environment: RELEASE
+    steps:
+      - name: Checkout target branch (RELEASE092025)
+        uses: actions/checkout@v4
+        with:
+          ref: RELEASE092025
+          token: ${{ secrets.PAT_TOKEN }}
+          fetch-depth: 0
+
+      - name: Configure Git
+        run: |
+          git config user.email "maltss_tech@optum.com"
+          git config user.name "maltssdeploy"
+
+      - name: Add remote and fetch source branch (MALTSSQA)
+        run: |
+          git remote add source-origin https://x-access-token:${{ secrets.PAT_TOKEN }}@github.com/${{ github.repository }}.git || true
+          git fetch source-origin MALTSSQA
+
+      # Get last merged SHA
+      - name: Get last merged SHA
+        id: lastsha
+        run: echo "sha=${{ vars.LAST_GOOD_SHA_RELEASE_MERGE }}" >> $GITHUB_OUTPUT
+
+      - name: Find changed files since last promotion
+        id: changes
+        run: |
+          mkdir -p artifacts
+          if [ -n "${{ steps.lastsha.outputs.sha }}" ]; then
+            git diff --name-status ${{ steps.lastsha.outputs.sha }} source-origin/MALTSSQA -- force-app/main/default/ > artifacts/changed_files.txt
+          else
+            git diff --name-status origin/RELEASE092025 source-origin/MALTSSQA -- force-app/main/default/ > artifacts/changed_files.txt
+          fi
+          echo "Changed files:"
+          cat artifacts/changed_files.txt
+
+      - name: Generate package.xml and destructiveChanges.xml
+        run: |
+          mkdir -p artifacts
+
+          # package.xml (only A/M files)
+          echo '<?xml version="1.0" encoding="UTF-8"?>' > artifacts/package.xml
+          echo '<Package xmlns="http://soap.sforce.com/2006/04/metadata">' >> artifacts/package.xml
+          awk '$1 != "D" {print "  <!-- " $0 " -->"}' artifacts/changed_files.txt >> artifacts/package.xml
+          echo '  <version>59.0</version>' >> artifacts/package.xml
+          echo '</Package>' >> artifacts/package.xml
+
+          # destructiveChanges.xml (only deletions)
+          echo '<?xml version="1.0" encoding="UTF-8"?>' > artifacts/destructiveChanges.xml
+          echo '<Package xmlns="http://soap.sforce.com/2006/04/metadata">' >> artifacts/destructiveChanges.xml
+          awk '$1 == "D" {print "  <!-- " $0 " -->"}' artifacts/changed_files.txt >> artifacts/destructiveChanges.xml
+          echo '</Package>' >> artifacts/destructiveChanges.xml
+
+          echo "Generated package.xml:"
+          cat artifacts/package.xml
+          echo "Generated destructiveChanges.xml:"
+          cat artifacts/destructiveChanges.xml
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: delta-artifacts
+          path: artifacts/*
+
+      - name: Copy changes (skip deletions)
+        run: |
+          while read status file; do
+            if [ "$status" = "A" ] || [ "$status" = "M" ]; then
+              mkdir -p "$(dirname "$file")"
+              git show "source-origin/MALTSSQA:$file" > "$file"
+            fi
+          done < artifacts/changed_files.txt
+
+      - name: Commit merged changes
+        run: |
+          git add force-app/main/default
+          if git diff --cached --quiet; then
+            echo "No non-deletion changes to commit."
+          else
+            git commit -m "Merge changes from MALTSSQA to RELEASE Branch"
+          fi
+
+      - name: Push changes to RELEASE092025
+        run: git push origin HEAD:RELEASE092025
+
+      - name: Update SHA ID 
+        run: |
+          NEW_SHA=$(git rev-parse source-origin/MALTSSQA)
+          gh api \
+            --method PATCH \
+            -H "Accept: application/vnd.github+json" \
+            /repos/${{ github.repository }}/environments/RELEASE092025/variables/LAST_GOOD_SHA_RELEASE_MERGE \
+            -f name="LAST_GOOD_SHA_RELEASE_MERGE" \
+            -f value="$NEW_SHA"
+        env:
+          GITHUB_TOKEN: ${{ secrets.PAT_TOKEN }}
+
+      - name: Success message
+        run: echo "Successfully merged changes from MALTSSQA → RELEASE Branch"
