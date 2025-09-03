@@ -1,0 +1,39 @@
+name: Verify CR
+on:
+  push:
+   branches:
+     #- main or your deployment branch  
+     - DDIQA_GHV1
+env:
+  SNOW_INSTANCE: optumstage.service-now.com
+  SNOW_USER: ${{ secrets.SNOW_USER }}
+  SNOW_PASSWORD: ${{ secrets.SNOW_PASSWORD }}
+  ASSIGNMENT_GROUP_NAME: e1593c734f65fe80648a8e1f0210c763   # replace with your actual group name or use sys_id
+
+jobs:
+  verify_cr: #Job Name
+    name: Check Approved CR for XYZ Group
+    runs-on: ubuntu-latest
+    steps:
+      - name: Query ServiceNow for Approved CR
+        id: check_cr
+        run: |
+          # Query approved CRs assigned to this group
+          RESPONSE=$(curl -s -X GET "https://${SNOW_INSTANCE}/api/now/table/change_request?sysparm_query=assignment_group=${ASSIGNMENT_GROUP_NAME}^stateIN-1,7&sysparm_fields=short_description,number&sysparm_limit=2" \
+            -u "$SNOW_USER:$SNOW_PASSWORD" \
+            -H "Accept: application/json")
+          MATCHING_CR=$(echo "$RESPONSE" | jq -r '.result | length')
+          if [ "$MATCHING_CR" -eq 0 ]; then
+            echo " No approved change request found for group $ASSIGNMENT_GROUP_NAME"
+            exit 1
+          fi
+          echo " Found $MATCHING_CR approved Change Request(s) for group $ASSIGNMENT_GROUP_NAME"
+          echo "$RESPONSE"
+          echo "Proceeding with deployment..."
+  deploy:
+    name: Deploy to PROD #job name
+    needs: verify_cr
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy to production
+        run: echo " Deployed to PROD after CR validation"
