@@ -180,4 +180,111 @@ jobs:
       - name: Extract Grouped Errors
         id: grouped
         run: |
-          jq -r '.result.details.componentFailures[]? | "\(.fileName): \(.problem)"' deplo
+          jq -r '.result.details.componentFailures[]? | "\(.fileName): \(.problem)"' deploy-result.json \
+            | grep -v null > file-errors.txt || true
+          
+          if [ -s file-errors.txt ]; then
+            awk -F': ' '
+              {
+                file=$1
+                error=$2
+                if (file != lastFile) {
+                  count++
+                  if (count > 1) print ""
+                  print count ". " file
+                  lastFile=file
+                  errorCount=0
+                }
+                errorCount++
+                print "   " count "." errorCount ") " error
+              }
+            ' file-errors.txt > grouped-errors.txt
+          else
+            echo "No errors found." > grouped-errors.txt
+          fi
+
+          {
+            echo "grouped<<EOF"
+            cat grouped-errors.txt
+            echo "EOF"
+          } >> $GITHUB_OUTPUT
+
+      # Step 4: Map PR author login to email (fallback to default email if none)
+      - name: Map PR requester to email
+        id: pr_author
+        run: |
+          AUTHOR_LOGIN="${{ github.event.pull_request.user.login }}"
+          EMAIL=$(curl -s -H "Authorization: Bearer ${{ secrets.PAT_TOKEN }}" \
+          "https://api.github.com/users/$AUTHOR_LOGIN" |
+          jq -r '.email')
+
+          if [ "$EMAIL" == "null" ] || [ -z "$EMAIL" ]; then
+             EMAIL="default-notify@optum.com"
+          fi
+          echo "PR Author: $AUTHOR_LOGIN"
+          echo "Email: $EMAIL"
+          echo "email=$EMAIL" >> $GITHUB_OUTPUT
+
+      # Step 5: Send email notification with grouped errors
+      - name: Send Email on Failure
+        if: needs.deploy-on-merge.outputs.deploy_status == 'Failed'
+        uses: uhg-pipelines/epl-send-mail@v1
+        with:
+          subject: "Build Failure - Your files caused errors"
+          to: "${{ steps.pr_author.outputs.email }}"
+          cc: neha_jain@optum.com, brajesh_tiwary@optum.com, chandrasekhar_uppalapati@optum.com, gopal_shakti@optum.com, shikha_devi@optum.com
+          from: "notifications@github.com"
+          body: |
+            The deployment to QA failed due to the following issues:
+            
+            ${{ steps.grouped.outputs.grouped }}
+
+  # -----------------------------------------------------------
+  # Job: Save last successful commit SHA to environment variable
+  # -----------------------------------------------------------
+  save_last_good_sha:
+    runs-on: uhg-runner-m
+    environment: MALTSSQA
+    needs: deploy-on-merge
+    if: needs.deploy-on-merge.outputs.deploy_status == 'Succeeded'
+
+    steps:
+      # Step 1: Checkout repo
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Step 2: Update environment variable with latest successful SHA
+      - name: Update LAST_GOOD_SHA_MALTSSQA environment variable
+        env:
+          GITHUB_TOKEN: ${{ secrets.PAT_TOKEN }}
+          OWNER: ${{ github.repository_owner }}
+          REPO: ${{ github.event.repository.name }}
+          ENV_NAME: MALTSSQA
+          VARIABLE_NAME: LAST_GOOD_SHA_MALTSSQA
+          SHA: ${{ github.sha }}
+        run: |
+          echo "Updating $VARIABLE_NAME in environment $ENV_NAME with SHA=$SHA"
+      
+          # Try PATCH update first
+          RESPONSE=$(curl -s -o response.json -w "%{http_code}" \
+            -X PATCH \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $GITHUB_TOKEN" \
+            https://api.github.com/repos/$OWNER/$REPO/environments/$ENV_NAME/variables/$VARIABLE_NAME \
+            -d "{\"name\":\"$VARIABLE_NAME\",\"value\":\"$SHA\"}")
+      
+          # If not found, create new variable
+          if [ "$RESPONSE" -eq 404 ]; then
+            echo "Variable not found, creating instead..."
+            RESPONSE=$(curl -s -o response.json -w "%{http_code}" \
+              -X POST \
+              -H "Accept: application/vnd.github+json" \
+              -H "Authorization: Bearer $GITHUB_TOKEN" \
+              https://api.github.com/repos/$OWNER/$REPO/environments/$ENV_NAME/variables \
+              -d "{\"name\":\"$VARIABLE_NAME\",\"value\":\"$SHA\"}")
+          fi
+      
+          echo "HTTP Response: $RESPONSE"
+          cat response.json
