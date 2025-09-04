@@ -1,35 +1,50 @@
-# -------------------------------------------------------------
+# ======================================================================
 # Salesforce Deployment Workflow (DDIQA Sandbox)
-# -------------------------------------------------------------
+# ======================================================================
 # Purpose:
-#   - Deploy changes to the DDIQA sandbox after PR merge.
-#   - Triggered on pull_request closure (merge to DDIQAGH branch) 
-#     or manually via workflow_dispatch.
+#   This workflow automates Salesforce metadata deployments to the DDIQA
+#   sandbox whenever changes are merged into the `DDIQAGH` branch or
+#   triggered manually.
 #
-# Flow:
-#   1. Checkout code
-#   2. Install Salesforce CLI + sfdx-git-delta
-#   3. Generate delta package (changed components since last good SHA)
-#   4. Deploy to Salesforce Sandbox
-#   5. Send email notification if deployment fails (grouped by file)
-#   6. Save last successful SHA on successful deploy
-# -------------------------------------------------------------
+# Triggers:
+#   - pull_request closed (merged into DDIQAGH)
+#   - push to DDIQAGH branch (force-app changes only)
+#   - manual trigger via workflow_dispatch
+#
+# Deployment Flow:
+#   1. Checkout repository code
+#   2. Install Salesforce CLI and authenticate to target org
+#   3. Generate delta package using sfdx-git-delta (based on last good SHA)
+#   4. Deploy package to sandbox
+#   5. Upload deployment artifacts (logs, results, package.xml)
+#   6. On failure → Send email notification (grouped errors by file)
+#   7. On success → Save last successful commit SHA to GitHub environment variable
+#
+# Special Handling:
+#   - Skips deployment if no changes are detected
+#   - Ignores destructiveChanges.xml to prevent accidental deletions
+#   - Tracks last known good commit SHA for reliable delta builds
+#   - Uses Personal Access Token (PAT) for environment updates + email lookup
+#
+# Outputs:
+#   - deploy_status (Succeeded / Failed / Skipped)
+# ======================================================================
 
 name: Deploy to DDIQA
 
 on:
   pull_request:
-    types: [closed]          # Trigger when a PR is closed
+    types: [closed]         # Trigger when PR is closed
     branches:
-      - DDIQAGH              # Only when merged to this branch
-    paths:
-      - 'force-app/main/default/**'   # Only if Salesforce metadata changed
-  workflow_dispatch:          # Allow manual trigger
-  push:
-    branches:
-      - DDIQAGH              # Run on direct pushes to this branch
+      - DDIQAGH             # Only for merges into DDIQAGH branch
     paths:
       - 'force-app/main/default/**'
+  push:
+    branches:
+      - DDIQAGH             # Trigger on direct pushes to DDIQAGH
+    paths:
+      - 'force-app/main/default/**'
+  workflow_dispatch:         # Allow manual trigger
 
 permissions:
   contents: write
@@ -48,20 +63,20 @@ jobs:
     environment: DDIQA
 
     outputs:
-      deploy_status: ${{ steps.deploy.outputs.deploy_status }}   # Capture status for dependent jobs
+      deploy_status: ${{ steps.deploy.outputs.deploy_status }}
 
     steps:
-      # -----------------------------
-      # Step 1: Checkout source code
-      # -----------------------------
+      # -----------------------------------------------------------
+      # Step 1: Checkout the repository code (with full history)
+      # -----------------------------------------------------------
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0   # Full history required for delta generation
+          fetch-depth: 0
 
-      # -----------------------------
+      # -----------------------------------------------------------
       # Step 2: Install Salesforce CLI
-      # -----------------------------
+      # -----------------------------------------------------------
       - name: Install Salesforce CLI
         run: |
           wget https://developer.salesforce.com/media/salesforce-cli/sf/channels/stable/sf-linux-x64.tar.xz
@@ -71,9 +86,9 @@ jobs:
           export PATH=$HOME/sfdx/bin:$PATH
           sf version
 
-      # -----------------------------
-      # Step 3: Save Auth URL secret into file
-      # -----------------------------
+      # -----------------------------------------------------------
+      # Step 3: Authenticate to Salesforce org using sfdxAuthUrl
+      # -----------------------------------------------------------
       - name: Populate auth file with SF_AUTH secret
         run: |
           echo "${{ secrets.SF_DDIQA_AUTH_URL }}" > ./AUTHURL.txt
@@ -82,21 +97,18 @@ jobs:
             exit 1
           fi
 
-      # -----------------------------
-      # Step 4: Authenticate to Salesforce org
-      # -----------------------------
       - name: Authenticate to the Org
         run: sf org login sfdx-url --sfdx-url-file ./AUTHURL.txt --set-default --alias thisOrg
 
-      # -----------------------------
-      # Step 5: Install sfdx-git-delta plugin
-      # -----------------------------
+      # -----------------------------------------------------------
+      # Step 4: Install sfdx-git-delta (delta package generator)
+      # -----------------------------------------------------------
       - name: Install sfdx git delta
         run: echo y | sf plugins install sfdx-git-delta
 
-      # -----------------------------
-      # Step 6: Create delta package of changes
-      # -----------------------------
+      # -----------------------------------------------------------
+      # Step 5: Create delta package from last successful SHA
+      # -----------------------------------------------------------
       - name: Create delta package
         run: |
           mkdir -p build/temp/changed-sources
@@ -106,35 +118,32 @@ jobs:
           find build/temp/changed-sources/ -type d -empty -delete
           zip -r build/temp/changed-sources.zip build/temp/changed-sources/
 
-      # -----------------------------
-      # Step 7: Display generated package.xml
-      # -----------------------------
       - name: Display package.xml
         run: |
           echo "Contents of package.xml:"
           cat build/temp/changed-sources/package/package.xml
-          
-      # -----------------------------
-      # Step 8: Save delta package as artifact
-      # -----------------------------
+
+      # -----------------------------------------------------------
+      # Step 6: Upload package as artifact for debugging
+      # -----------------------------------------------------------
       - name: Upload zip artifact
         uses: actions/upload-artifact@v4
         with:
           name: changed-sources
           path: build/temp/changed-sources.zip
+          retention-days: 7
 
-      # -----------------------------
-      # Step 9: Remove destructiveChanges.xml 
-      # (to avoid deletions in sandbox)
-      # -----------------------------
+      # -----------------------------------------------------------
+      # Step 7: Remove destructiveChanges.xml (safety measure)
+      # -----------------------------------------------------------
       - name: Remove destructiveChanges.xml
         run: |
-          cat build/temp/changed-sources/destructiveChanges/destructiveChanges.xml
+          cat build/temp/changed-sources/destructiveChanges/destructiveChanges.xml || true
           rm -f build/temp/changed-sources/destructiveChanges/destructiveChanges.xml
-          
-      # -----------------------------
-      # Step 10: Deploy to Salesforce Sandbox
-      # -----------------------------
+
+      # -----------------------------------------------------------
+      # Step 8: Deploy to Salesforce Sandbox
+      # -----------------------------------------------------------
       - name: Deploy to Sandbox
         id: deploy
         run: |
@@ -145,10 +154,13 @@ jobs:
             --wait 360 \
             --json \
             --verbose > deploy-result.json 2> deploy-error.log; then
+
             if grep -q '"name": "NothingToDeploy"' deploy-result.json; then
               echo "No changes to deploy. Skipping..."
+              echo "deploy_status=Skipped" >> $GITHUB_OUTPUT
               exit 0
             fi
+
             echo "Deployment failed."
             echo "deploy_status=Failed" >> $GITHUB_OUTPUT
           else
@@ -156,19 +168,22 @@ jobs:
             echo "deploy_status=Succeeded" >> $GITHUB_OUTPUT
           fi
 
-      # -----------------------------
-      # Step 11: Upload deployment result for debugging
-      # -----------------------------
+      # -----------------------------------------------------------
+      # Step 9: Upload deployment logs/results for troubleshooting
+      # -----------------------------------------------------------
       - name: Upload deployment result
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: deploy-result
-          path: deploy-result.json
+          path: |
+            deploy-result.json
+            deploy-error.log
+          retention-days: 7
 
-  # -------------------------------------------------------------
-  # Job: Send Email Notification if Deployment Failed
-  # -------------------------------------------------------------
+  # ==================================================================
+  # JOB: Send Email Notification (only on deployment failure)
+  # ==================================================================
   Send_Email_Notification:
     runs-on: uhg-runner-m
     environment: DDIQA
@@ -181,17 +196,12 @@ jobs:
         with:
           fetch-depth: 0
 
-      # -----------------------------
-      # Step 1: Download deployment result artifact
-      # -----------------------------
       - name: Download deployment result
         uses: actions/download-artifact@v4
         with:
           name: deploy-result
 
-      # -----------------------------
-      # Step 2: Extract and group errors by file
-      # -----------------------------
+      # Extract errors and group them by file
       - name: Extract Grouped Errors
         id: grouped
         run: |
@@ -220,29 +230,28 @@ jobs:
 
           echo "grouped=$(sed ':a;N;$!ba;s/\n/\\n/g' grouped-errors.txt)" >> $GITHUB_OUTPUT
 
-      # -----------------------------
-      # Step 3: Map PR author login to email
-      # -----------------------------
+      # Try mapping PR author to email (fallback to commit email if null)
       - name: Map PR requester to email
         id: pr_author
         run: |
           AUTHOR_LOGIN="${{ github.event.pull_request.user.login }}"
           EMAIL=$(curl -s -H "Authorization: Bearer ${{ secrets.PAT_TOKEN }}" \
-          "https://api.github.com/users/$AUTHOR_LOGIN" |
-          jq -r '.email')
+          "https://api.github.com/users/$AUTHOR_LOGIN" | jq -r '.email')
 
           if [ "$EMAIL" == "null" ] || [ -z "$EMAIL" ]; then
+             EMAIL=$(git log -1 --pretty=format:'%ae')
+          fi
+
+          if [ -z "$EMAIL" ]; then
              EMAIL="default-notify@optum.com"
           fi
+
           echo "PR Author: $AUTHOR_LOGIN"
           echo "Email: $EMAIL"
           echo "email=$EMAIL" >> $GITHUB_OUTPUT
 
-      # -----------------------------
-      # Step 4: Send notification email with errors
-      # -----------------------------
+      # Send failure email with grouped errors
       - name: Send Email on Failure
-        if: needs.deploy-on-merge.outputs.deploy_status == 'Failed'
         uses: uhg-pipelines/epl-send-mail@v1
         with:
           subject: "Build Failure - Your files caused errors"
@@ -251,12 +260,12 @@ jobs:
           from: "donotreply@optum.com"
           body: |
             The deployment to DDIQA failed due to the following issues:
-            
+
             ${{ steps.grouped.outputs.grouped }}
 
-  # -------------------------------------------------------------
-  # Job: Save last good SHA if Deployment Succeeded
-  # -------------------------------------------------------------
+  # ==================================================================
+  # JOB: Save last successful SHA (only if deploy succeeded)
+  # ==================================================================
   save_last_good_sha:
     runs-on: uhg-runner-m
     environment: DDIQA
@@ -269,9 +278,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      # -----------------------------
-      # Step 1: Update GitHub environment variable with last good SHA
-      # -----------------------------
+      # Update GitHub environment variable with last successful SHA
       - name: Update LAST_GOOD_SHA_DDIQA environment variable
         env:
           GITHUB_TOKEN: ${{ secrets.PAT_TOKEN }}
@@ -283,7 +290,7 @@ jobs:
         run: |
           echo "Updating $VARIABLE_NAME in environment $ENV_NAME with SHA=$SHA"
       
-          # Try to update variable (PATCH)
+          # Try to update (PATCH)
           RESPONSE=$(curl -s -o response.json -w "%{http_code}" \
             -X PATCH \
             -H "Accept: application/vnd.github+json" \
@@ -291,7 +298,6 @@ jobs:
             https://api.github.com/repos/$OWNER/$REPO/environments/$ENV_NAME/variables/$VARIABLE_NAME \
             -d "{\"name\":\"$VARIABLE_NAME\",\"value\":\"$SHA\"}")
       
-          # If not found, create it (POST)
           if [ "$RESPONSE" -eq 404 ]; then
             echo "Variable not found, creating instead..."
             RESPONSE=$(curl -s -o response.json -w "%{http_code}" \
