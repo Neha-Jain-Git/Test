@@ -1,0 +1,280 @@
+# =================================================================================================
+# Salesforce Deployment Workflow - INTQA Sandbox
+# =================================================================================================
+# 🔹 Summary:
+# This workflow automates Salesforce metadata deployment to the INTQA sandbox.  
+# It is designed to run on demand (manual trigger) or after PR merges (if enabled).
+#
+# 🔹 Why:
+# - Ensures consistent deployments to INTQA environment.
+# - Tracks last successful commit SHA for delta deployments (using sfdx-git-delta).
+# - Sends grouped error emails if deployment fails.
+#
+# 🔹 Workflow Flow:
+#   1. Checkout source code from GitHub
+#   2. Install Salesforce CLI and authenticate to INTQA org
+#   3. Install sfdx-git-delta plugin
+#   4. Generate delta package (changes since last successful deployment)
+#   5. Deploy delta package to INTQA sandbox
+#   6. Upload deployment logs and results as artifacts
+#   7. On failure → Extract and group errors by file → Send email notification
+#   8. On success → Save latest successful commit SHA in GitHub environment variables
+#
+# 🔹 Notifications:
+# - If deployment fails, an email is sent to the development team with grouped errors.
+# - On success, LAST_GOOD_SHA_INTQA is updated for incremental deployments.
+#
+# 🔹 Key Tools Used:
+# - Salesforce CLI (sf)
+# - sfdx-git-delta (delta generation)
+# - GitHub Actions Artifacts (to store logs)
+# - GitHub Environments API (to save SHA)
+# - uhg-pipelines/epl-send-mail@v1 (to send email notifications)
+# =================================================================================================
+
+name: Deploy to INTQA
+
+on:
+  # push:      
+    # branches: 
+      # - "RELEASE092025"        # Uncomment to enable auto trigger on release branch
+    # paths:
+      # - 'force-app/main/default/**'   # Restrict trigger only to metadata folder changes
+  workflow_dispatch:   # Manual trigger option (always available)
+  
+permissions:
+  contents: write
+  pull-requests: write
+  checks: read
+  actions: write
+
+env:
+  environment: INTQA
+  SF_INTQA_AUTH_URL: ${{ secrets.SF_INTQA_AUTH_URL }}   # Salesforce Auth URL stored in secrets
+  PAT_TOKEN: ${{ secrets.PAT_TOKEN }}                   # Personal Access Token for env updates
+
+jobs:
+  deploy-on-merge:
+    runs-on: uhg-runner-m
+    environment: INTQA
+    
+    outputs:
+      deploy_status: ${{ steps.deploy.outputs.deploy_status }}   # Capture status for next jobs
+
+    steps:
+      # --------------------------
+      # Step 1: Checkout Code
+      # --------------------------
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # Full history needed for sfdx-git-delta comparisons
+
+      # --------------------------
+      # Step 2: Install Salesforce CLI
+      # --------------------------
+      - name: Install Salesforce CLI
+        run: |
+          wget https://developer.salesforce.com/media/salesforce-cli/sf/channels/stable/sf-linux-x64.tar.xz
+          mkdir ~/sfdx
+          tar xJf sf-linux-x64.tar.xz -C ~/sfdx --strip-components 1
+          echo "$HOME/sfdx/bin" >> $GITHUB_PATH
+          export PATH=$HOME/sfdx/bin:$PATH
+          sf version   # Print installed CLI version
+          
+      # --------------------------
+      # Step 3: Authenticate to Salesforce Org
+      # --------------------------
+      - name: Populate auth file with SF_AUTH secret
+        shell: bash
+        run: |
+          echo "${{ secrets.SF_INTQA_AUTH_URL }}" > ./AUTHURL.txt
+          if [ $(wc -c < "./AUTHURL.txt") -le 1 ]; then
+            echo "Missing AUTHURL secret"
+            exit 1
+          fi
+      - name: Authenticate to the Org
+        run: sf org login sfdx-url --sfdx-url-file ./AUTHURL.txt --set-default --alias thisOrg
+
+      # --------------------------
+      # Step 4: Install sfdx-git-delta Plugin
+      # --------------------------
+      - name: Install sfdx git delta
+        run: echo y | sf plugins install sfdx-git-delta
+
+      # --------------------------
+      # Step 5: Create Delta Package
+      # --------------------------
+      - name: Create delta package
+        run: |
+          mkdir -p build/temp/changed-sources
+          echo "LAST_GOOD_SHA_INTQA: ${{ vars.LAST_GOOD_SHA_INTQA }}"
+          # Generate delta between last good commit and release branch
+          sf sgd source delta --from "${{ vars.LAST_GOOD_SHA_INTQA }}" --to "origin/RELEASE092025" \
+            --output-dir build/temp/changed-sources/ --generate-delta --source-dir force-app/ --ignore-file .gitignore
+          # Clean up empty folders
+          find build/temp/changed-sources/ -type d -empty -delete
+          # Zip changes for artifact upload
+          zip -r build/temp/changed-sources.zip build/temp/changed-sources/
+
+      - name: Display package.xml
+        run: |
+          echo "Contents of package.xml:"
+          cat build/temp/changed-sources/package/package.xml
+
+      - name: Upload zip artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: changed-sources
+          path: build/temp/changed-sources.zip
+
+      # --------------------------
+      # Step 6: Clean destructiveChanges.xml
+      # --------------------------
+      - name: Remove destructiveChanges.xml
+        run: |
+          # Show destructive changes, then remove to prevent deletions
+          cat build/temp/changed-sources/destructiveChanges/destructiveChanges.xml
+          rm -f build/temp/changed-sources/destructiveChanges/destructiveChanges.xml
+          
+      # --------------------------
+      # Step 7: Deploy to Sandbox
+      # --------------------------
+      - name: Deploy to Sandbox
+        id: deploy
+        run: |
+          echo "Starting Salesforce Deployment"
+          if ! sf project deploy start \
+            --source-dir build/temp/changed-sources/ \
+            --target-org thisOrg \
+            --wait 360 \
+            --json \
+            --verbose > deploy-result.json 2> deploy-error.log; then
+            # Handle case when no changes are available
+            if grep -q '"name": "NothingToDeploy"' deploy-result.json; then
+              echo "No changes to deploy. Skipping..."
+              exit 0
+            fi
+            echo "Deployment failed."
+            echo "deploy_status=Failed" >> $GITHUB_OUTPUT
+          else
+            echo "Deployment succeeded."
+            echo "deploy_status=Succeeded" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Upload deployment result
+        if: always()   # Always upload results for review
+        uses: actions/upload-artifact@v4
+        with:
+          name: deploy-result
+          path: deploy-result.json
+
+  # =====================================================================
+  # Job: Send Email Notification (Runs only if deployment fails)
+  # =====================================================================
+  Send_Email_Notification:
+    runs-on: uhg-runner-m
+    environment: INTQA
+    needs: deploy-on-merge
+    if: needs.deploy-on-merge.outputs.deploy_status == 'Failed'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download deployment result
+        uses: actions/download-artifact@v4
+        with:
+          name: deploy-result
+
+      - name: Extract Grouped Errors
+        id: grouped
+        run: |
+          # Extract component failure messages grouped by file
+          jq -r '.result.details.componentFailures[]? | "\(.fileName): \(.problem)"' deploy-result.json \
+            | grep -v null > file-errors.txt || true
+          
+          if [ -s file-errors.txt ]; then
+            # Format: File grouped with numbered errors
+            awk -F': ' '
+              {
+                file=$1
+                error=$2
+                if (file != lastFile) {
+                  count++
+                  if (count > 1) print ""
+                  print count ". " file
+                  lastFile=file
+                  errorCount=0
+                }
+                errorCount++
+                print "   " count "." errorCount ") " error
+              }
+            ' file-errors.txt > grouped-errors.txt
+          else
+            echo "No errors found." > grouped-errors.txt
+          fi
+          echo "grouped=$(sed ':a;N;$!ba;s/\n/\\n/g' grouped-errors.txt)" >> $GITHUB_OUTPUT
+
+      - name: Send Email on Failure
+        if: needs.deploy-on-merge.outputs.deploy_status == 'Failed'
+        uses: uhg-pipelines/epl-send-mail@v1
+        with:
+          subject: "Build Failure - Your files caused errors"
+          to: brajesh_tiwary@optum.com, chandrasekhar_uppalapati@optum.com, gopal_shakti@optum.com, shikha_devi@optum.com
+          cc: neha_jain@optum.com
+          from: "notifications@github.com"
+          body: |
+            The deployment to INTQA failed due to the following issues:
+            
+            ${{ steps.grouped.outputs.grouped }}
+
+  # =====================================================================
+  # Job: Save Last Successful SHA (Runs only if deployment succeeds)
+  # =====================================================================
+  save_last_good_sha:
+    runs-on: uhg-runner-m
+    environment: INTQA
+    needs: deploy-on-merge
+    if: needs.deploy-on-merge.outputs.deploy_status == 'Succeeded'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 
+          
+      - name: Update LAST_GOOD_SHA_INTQA environment variable
+        env:
+          GITHUB_TOKEN: ${{ secrets.PAT_TOKEN }}   # Using PAT to update environment variables
+          OWNER: ${{ github.repository_owner }}
+          REPO: ${{ github.event.repository.name }}
+          ENV_NAME: INTQA
+          VARIABLE_NAME: LAST_GOOD_SHA_INTQA
+          SHA: ${{ github.sha }}
+        run: |
+          echo "Updating $VARIABLE_NAME in environment $ENV_NAME with SHA=$SHA"
+      
+          # Try updating variable (PATCH)
+          RESPONSE=$(curl -s -o response.json -w "%{http_code}" \
+            -X PATCH \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $GITHUB_TOKEN" \
+            https://api.github.com/repos/$OWNER/$REPO/environments/$ENV_NAME/variables/$VARIABLE_NAME \
+            -d "{\"name\":\"$VARIABLE_NAME\",\"value\":\"$SHA\"}")
+      
+          # If variable not found, create it (POST)
+          if [ "$RESPONSE" -eq 404 ]; then
+            echo "Variable not found, creating instead..."
+            RESPONSE=$(curl -s -o response.json -w "%{http_code}" \
+              -X POST \
+              -H "Accept: application/vnd.github+json" \
+              -H "Authorization: Bearer $GITHUB_TOKEN" \
+              https://api.github.com/repos/$OWNER/$REPO/environments/$ENV_NAME/variables \
+              -d "{\"name\":\"$VARIABLE_NAME\",\"value\":\"$SHA\"}")
+          fi
+      
+          echo "HTTP Response: $RESPONSE"
+          cat response.json
