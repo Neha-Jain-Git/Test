@@ -10,3 +10,4 @@ maxPoll="${sf.maxPoll}" deployRoot="./testSrcPROD" pollWaitMillis="500000" check
             #--wait 360 \
             #--json \
             #--verbose > deploy-result.json 2> deploy-error.log; then
+<sf:deploy username="${sf.username}" password="${sf.password}" sessionId="${sf.sessionId}" serverurl="${sf.serverurl}" maxPoll="${sf.maxPoll}" deployRoot="./testSrc" > <!--testLevel="RunSpecifiedTests" rollbackOnError="true"-->
