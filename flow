@@ -1,1 +1,12 @@
-	<sf:deploy username="${sf.usernamePROD}" password="${env.PROD}" sessionId="${sf.sessionId}" serverurl="${sf.serverurlPROD}" maxPoll="${sf.maxPoll}" deployRoot="./testSrcPROD" pollWaitMillis="500000" checkOnly="true" testLevel="RunSpecifiedTests">
+	<sf:deploy username="${sf.usernamePROD}" password="${env.PROD}" sessionId="${sf.sessionId}" serverurl="${sf.serverurlPROD}" 
+maxPoll="${sf.maxPoll}" deployRoot="./testSrcPROD" pollWaitMillis="500000" checkOnly="true" testLevel="RunSpecifiedTests">
+
+
+
+
+          #if ! sf project deploy start \
+            #--source-dir build/temp/changed-sources/ \
+            #--target-org thisOrg \
+            #--wait 360 \
+            #--json \
+            #--verbose > deploy-result.json 2> deploy-error.log; then
