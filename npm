@@ -1,0 +1,6 @@
+- name: Configure JFrog npm registry
+  run: |
+    npm config set registry https://centraluhg.jfrog.io/artifactory/api/npm/maltss-npm-vir/
+    npm config set always-auth true
+    npm config set //centraluhg.jfrog.io/artifactory/api/npm/maltss-npm-vir/:_authToken=${{ secrets.JFROG_NPM_TOKEN }}
+    echo "SF_NPM_REGISTRY=https://centraluhg.jfrog.io/artifactory/api/npm/maltss-npm-vir/" >> $GITHUB_ENV
