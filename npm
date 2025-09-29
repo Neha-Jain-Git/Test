@@ -15,3 +15,11 @@
     npm config set //centraluhg.jfrog.io/artifactory/api/npm/maltss-npm-vir/:username=${{ secrets.JFROG_USERNAME }}
     npm config set //centraluhg.jfrog.io/artifactory/api/npm/maltss-npm-vir/:_password=$(echo -n "${{ secrets.JFROG_PASSWORD }}" | base64)
     echo "SF_NPM_REGISTRY=https://centraluhg.jfrog.io/artifactory/api/npm/maltss-npm-vir/" >> $GITHUB_ENV
+
+
+- name: Configure JFrog npm registry
+  run: |
+    npm config set registry https://centraluhg.jfrog.io/artifactory/api/npm/maltss-npm-vir/
+    npm config set //centraluhg.jfrog.io/artifactory/api/npm/maltss-npm-vir/:_authToken=${{ secrets.JFROG_NPM_TOKEN }}
+    npm config set //centraluhg.jfrog.io/artifactory/api/npm/maltss-npm-vir/:always-auth=true
+    echo "SF_NPM_REGISTRY=https://centraluhg.jfrog.io/artifactory/api/npm/maltss-npm-vir/" >> $GITHUB_ENV
