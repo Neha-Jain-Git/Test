@@ -12,7 +12,7 @@ permissions:
 jobs:
   Merge:
     runs-on: ubuntu-latest
-    environment: Test
+    environment: main
 
     steps:
       - name: Checkout target branch (Test)
