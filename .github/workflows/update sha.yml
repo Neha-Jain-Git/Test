@@ -12,8 +12,7 @@ jobs:
       (
         github.event.pull_request.base.ref == 'Test' ||
         github.event.pull_request.base.ref == 'QA'
-      ) &&
-      github.event.pull_request.head.repo.fork == false
+      ) 
 
     runs-on: ubuntu-latest
 
