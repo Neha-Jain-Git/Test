@@ -12,15 +12,14 @@ permissions:
 jobs:
   Merge:
     runs-on: ubuntu-latest
-    environment: main
+    environment: Test
 
     steps:
-      # Checkout the target branch (main)
-      - name: Checkout target branch (main)
+      # Checkout the target branch (Test)
+      - name: Checkout target branch (Test)
         uses: actions/checkout@v4
         with:
-          ref: main
-          #token: ${{ secrets.PAT_TOKEN }}
+          ref: Test
           fetch-depth: 0
 
       # Configure Git
@@ -38,7 +37,7 @@ jobs:
       # Get last merged SHA
       - name: Get last merged SHA
         id: lastsha
-        run: echo "sha=${{ vars.LAST_GOOD_SHA_main_MERGE }}" >> $GITHUB_OUTPUT
+        run: echo "sha=${{ vars.LAST_GOOD_SHA_main_TO_Test }}" >> $GITHUB_OUTPUT
 
       # Find changed files
       - name: Find changed files since last promotion
@@ -48,7 +47,7 @@ jobs:
           if [ -n "${{ steps.lastsha.outputs.sha }}" ]; then
             git diff --name-status ${{ steps.lastsha.outputs.sha }} source-origin/main > artifacts/changed_files.txt
           else
-            git diff --name-status origin/main source-origin/main > artifacts/changed_files.txt
+            git diff --name-status origin/Test source-origin/main > artifacts/changed_files.txt
           fi
           echo "Changed files:"
           cat artifacts/changed_files.txt
@@ -93,19 +92,19 @@ jobs:
           if git diff --cached --quiet; then
             echo "No changes to commit."
           else
-            git commit -m "Merge changes from main into main"
+            git commit -m "Merge changes from main into Test"
           fi
           git push origin $BRANCH_NAME
 
-      # Create PR into main
+      # Create PR into Test
       - name: Create Pull Request
         id: create_pr
         run: |
           PR_URL=$(gh pr create \
-            --base main \
+            --base Test \
             --head ${{ env.branch_name }} \
-            --title "Merge main into main" \
-            --body "Automated PR to merge main changes into main branch" \
+            --title "Merge main into Test" \
+            --body "Automated PR to merge main changes into Test branch" \
             --assignee "GIT_Admin" \
             --reviewer "GIT_Admin" \
             --label "release-merge")
