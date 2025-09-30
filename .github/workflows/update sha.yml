@@ -3,12 +3,14 @@ name: Update Last Good SHA
 on:
   pull_request:
     types: [closed]
+    branches:
+      - Test
+      - QA
 
 jobs:
   update-sha:
     # Run only if PR was merged
-    if: >
-      github.event.pull_request.merged == true
+    if: github.event.pull_request.merged == true
 
     runs-on: ubuntu-latest
 
