@@ -1,0 +1,32 @@
+name: Update Last Good SHA
+
+on:
+  pull_request:
+    types: [closed]
+
+jobs:
+  update-sha:
+    # Run only if PR was merged
+    if: >
+      github.event.pull_request.merged == true &&
+      (
+        github.event.pull_request.base.ref == 'Test' ||
+        github.event.pull_request.base.ref == 'QA'
+      ) &&
+      github.event.pull_request.head.repo.fork == false
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Extract branch and SHA
+        run: |
+          BASE_BRANCH="${{ github.event.pull_request.base.ref }}"
+          MERGE_SHA="${{ github.event.pull_request.merge_commit_sha }}"
+          echo "Base branch: $BASE_BRANCH"
+          echo "Merge SHA: $MERGE_SHA"
+
+          if [ "$BASE_BRANCH" = "Test" ]; then
+            echo "LAST_GOOD_SHA_main_TO_Test=$MERGE_SHA" >> $GITHUB_ENV
+          elif [ "$BASE_BRANCH" = "QA" ]; then
+            echo "LAST_GOOD_SHA_main_TO_QA=$MERGE_SHA" >> $GITHUB_ENV
+          fi
