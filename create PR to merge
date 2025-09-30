@@ -1,10 +1,4 @@
-# Workflow: Merge RELEASE to main
-# Summary:
-# This workflow merges changes from the RELEASE branch (RELEASE092025) into the main branch.
-# It identifies changed files since the last successful merge, generates delta artifacts (package.xml and destructiveChanges.xml),
-# applies non-deletion changes, commits them, pushes to main, and updates the SHA reference for future merges.
-
-name: Merge RELEASE to main
+name: Merge RELEASE to main via PR
 
 on:
   workflow_dispatch:  # Manual trigger
@@ -27,26 +21,26 @@ jobs:
         with:
           ref: main
           token: ${{ secrets.PAT_TOKEN }}
-          fetch-depth: 0  # Full history for accurate diff
+          fetch-depth: 0
 
-      # Configure Git user for commits
+      # Configure Git
       - name: Configure Git
         run: |
           git config user.email "maltss_tech@optum.com"
           git config user.name "maltssdeploy"
 
-      # Add remote and fetch source branch (RELEASE092025)
-      - name: Add remote and fetch source branch (RELEASE092025)
+      # Add remote and fetch RELEASE branch
+      - name: Add remote and fetch RELEASE092025
         run: |
           git remote add source-origin https://x-access-token:${{ secrets.PAT_TOKEN }}@github.com/${{ github.repository }}.git || true
           git fetch source-origin RELEASE092025
 
-      # Retrieve last successful merge SHA from environment variable
+      # Get last merged SHA
       - name: Get last merged SHA
         id: lastsha
         run: echo "sha=${{ vars.LAST_GOOD_SHA_main_MERGE }}" >> $GITHUB_OUTPUT
 
-      # Identify changed files since last promotion
+      # Find changed files
       - name: Find changed files since last promotion
         id: changes
         run: |
@@ -59,35 +53,27 @@ jobs:
           echo "Changed files:"
           cat artifacts/changed_files.txt
 
-      # Generate package.xml and destructiveChanges.xml based on changes
+      # Generate package.xml + destructiveChanges.xml
       - name: Generate package.xml and destructiveChanges.xml
         run: |
           mkdir -p artifacts
-          # package.xml (for added/modified files)
           echo '<?xml version="1.0" encoding="UTF-8"?>' > artifacts/package.xml
           echo '<Package xmlns="http://soap.sforce.com/2006/04/metadata">' >> artifacts/package.xml
           awk '$1 != "D" {print "  <!-- " $0 " -->"}' artifacts/changed_files.txt >> artifacts/package.xml
           echo '  <version>59.0</version>' >> artifacts/package.xml
           echo '</Package>' >> artifacts/package.xml
 
-          # destructiveChanges.xml (for deleted files)
           echo '<?xml version="1.0" encoding="UTF-8"?>' > artifacts/destructiveChanges.xml
           echo '<Package xmlns="http://soap.sforce.com/2006/04/metadata">' >> artifacts/destructiveChanges.xml
           awk '$1 == "D" {print "  <!-- " $0 " -->"}' artifacts/changed_files.txt >> artifacts/destructiveChanges.xml
           echo '</Package>' >> artifacts/destructiveChanges.xml
 
-          echo "Generated package.xml:"
-          cat artifacts/package.xml
-          echo "Generated destructiveChanges.xml:"
-          cat artifacts/destructiveChanges.xml
-
-      # Upload delta artifacts for reference or deployment
       - uses: actions/upload-artifact@v4
         with:
           name: delta-artifacts
           path: artifacts/*
 
-      # Copy added/modified files from RELEASE to main (skip deletions)
+      # Copy changes (skip deletions)
       - name: Copy changes (skip deletions)
         run: |
           while read status file; do
@@ -97,33 +83,36 @@ jobs:
             fi
           done < artifacts/changed_files.txt
 
-      # Commit the merged changes to main
-      - name: Commit merged changes
+      # Create new branch for PR
+      - name: Create feature branch for PR
         run: |
+          BRANCH_NAME="merge-release092025-to-main-$(date +%Y%m%d%H%M%S)"
+          echo "branch_name=$BRANCH_NAME" >> $GITHUB_ENV
+          git checkout -b $BRANCH_NAME
           git add force-app/main/default
           if git diff --cached --quiet; then
-            echo "No non-deletion changes to commit."
+            echo "No changes to commit."
           else
-            git commit -m "Merge changes from RELEASE to main Branch"
+            git commit -m "Merge changes from RELEASE092025 into main"
           fi
+          git push origin $BRANCH_NAME
 
-      # Push committed changes to main branch
-      - name: Push changes to main
-        run: git push origin HEAD:main
-
-      # Update the environment variable with the new SHA from RELEASE
-      - name: Update SHA ID 
+      # Create PR into main
+      - name: Create Pull Request
+        id: create_pr
         run: |
-          NEW_SHA=$(git rev-parse source-origin/RELEASE092025)
-          gh api \
-            --method PATCH \
-            -H "Accept: application/vnd.github+json" \
-            /repos/${{ github.repository }}/environments/main/variables/LAST_GOOD_SHA_main_MERGE \
-            -f name="LAST_GOOD_SHA_main_MERGE" \
-            -f value="$NEW_SHA"
+          PR_URL=$(gh pr create \
+            --base main \
+            --head ${{ env.branch_name }} \
+            --title "Merge RELEASE092025 into main" \
+            --body "Automated PR to merge RELEASE092025 changes into main branch" \
+            --assignee "GIT_Admin" \
+            --reviewer "GIT_Admin" \
+            --label "release-merge")
+          echo "pr_url=$PR_URL" >> $GITHUB_OUTPUT
         env:
           GITHUB_TOKEN: ${{ secrets.PAT_TOKEN }}
 
-      # Final success message
-      - name: Success message
-        run: echo "Successfully merged changes from RELEASE → main Branch"
+      # Output PR link
+      - name: PR created
+        run: echo "Pull Request created: ${{ steps.create_pr.outputs.pr_url }}"
