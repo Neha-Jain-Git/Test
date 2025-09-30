@@ -6,7 +6,15 @@ on:
 
 jobs:
   update-sha:
-    if: github.event.pull_request.merged == true
+    # Run only if PR was merged
+    if: >
+      github.event.pull_request.merged == true &&
+      (
+        github.event.pull_request.base.ref == 'Test' ||
+        github.event.pull_request.base.ref == 'QA'
+      ) &&
+      github.event.pull_request.head.repo.fork == false
+
     runs-on: ubuntu-latest
 
     steps:
@@ -18,16 +26,11 @@ jobs:
           echo "Merge SHA: $MERGE_SHA"
 
           if [ "$BASE_BRANCH" = "Test" ]; then
-            echo "Updating LAST_GOOD_SHA_main_TO_Test"
             echo "LAST_GOOD_SHA_main_TO_Test=$MERGE_SHA" >> $GITHUB_ENV
-          elif [ "$BASE_BRANCH" = "main" ]; then
-            echo "Updating LAST_GOOD_SHA_Test_TO_main"
-            echo "LAST_GOOD_SHA_Test_TO_main=$MERGE_SHA" >> $GITHUB_ENV
-          else
-            echo "No matching branch rule"
+          elif [ "$BASE_BRANCH" = "QA" ]; then
+            echo "LAST_GOOD_SHA_main_TO_QA=$MERGE_SHA" >> $GITHUB_ENV
           fi
 
-      # Example: commit to a file in repo for persistence
       - name: Checkout repo
         uses: actions/checkout@v4
 
@@ -37,12 +40,12 @@ jobs:
           if [ -n "$LAST_GOOD_SHA_main_TO_Test" ]; then
             echo "$LAST_GOOD_SHA_main_TO_Test" > .ci/last_sha_main_to_test.txt
           fi
-          if [ -n "$LAST_GOOD_SHA_Test_TO_main" ]; then
-            echo "$LAST_GOOD_SHA_Test_TO_main" > .ci/last_sha_test_to_main.txt
+          if [ -n "$LAST_GOOD_SHA_main_TO_QA" ]; then
+            echo "$LAST_GOOD_SHA_main_TO_QA" > .ci/last_sha_main_to_qa.txt
           fi
 
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add .ci/
-          git commit -m "Update last good SHA files [skip ci]" || echo "No changes to commit"
+          git commit -m "Update last good SHA for $BASE_BRANCH [skip ci]" || echo "No changes to commit"
           git push
