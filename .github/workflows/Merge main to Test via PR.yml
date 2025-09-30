@@ -1,0 +1,109 @@
+name: Merge main to Test via PR
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  checks: read
+  actions: write
+
+jobs:
+  Merge:
+    runs-on: ubuntu-latest
+    environment: main
+
+    steps:
+      - name: Checkout target branch (Test)
+        uses: actions/checkout@v4
+        with:
+          ref: Test
+          fetch-depth: 0
+
+      - name: Configure Git
+        run: |
+          git config user.email "neha.sforce@gmail.com"
+          git config user.name "neha-jain-git"
+
+      - name: Add remote and fetch main
+        run: |
+          git remote add source-origin https://github.com/Neha-Jain-Git/Test.git || true
+          git fetch source-origin main
+
+      - name: Get last merged SHA
+        id: lastsha
+        run: |
+          echo "sha=${{ vars.LAST_GOOD_SHA_main_TO_Test }}" >> $GITHUB_OUTPUT
+
+      - name: Find changed files since last promotion
+        id: changes
+        run: |
+          mkdir -p artifacts
+          if [ -n "${{ steps.lastsha.outputs.sha }}" ]; then
+            git diff --name-status ${{ steps.lastsha.outputs.sha }} source-origin/main > artifacts/changed_files.txt
+          else
+            git diff --name-status origin/Test source-origin/main > artifacts/changed_files.txt
+          fi
+          echo "Changed files:"
+          cat artifacts/changed_files.txt
+
+      - name: Generate package.xml and destructiveChanges.xml
+        run: |
+          mkdir -p artifacts
+          echo '<?xml version="1.0" encoding="UTF-8"?>' > artifacts/package.xml
+          echo '<Package xmlns="http://soap.sforce.com/2006/04/metadata">' >> artifacts/package.xml
+          awk '$1 != "D" {print "  <!-- " $0 " -->"}' artifacts/changed_files.txt >> artifacts/package.xml
+          echo '  <version>59.0</version>' >> artifacts/package.xml
+          echo '</Package>' >> artifacts/package.xml
+
+          echo '<?xml version="1.0" encoding="UTF-8"?>' > artifacts/destructiveChanges.xml
+          echo '<Package xmlns="http://soap.sforce.com/2006/04/metadata">' >> artifacts/destructiveChanges.xml
+          awk '$1 == "D" {print "  <!-- " $0 " -->"}' artifacts/changed_files.txt >> artifacts/destructiveChanges.xml
+          echo '</Package>' >> artifacts/destructiveChanges.xml
+
+      - name: Upload delta artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: delta-artifacts
+          path: artifacts/*
+
+      - name: Copy changes (skip deletions)
+        run: |
+          while read status file; do
+            if [ "$status" = "A" ] || [ "$status" = "M" ]; then
+              mkdir -p "$(dirname "$file")"
+              git show "source-origin/main:$file" > "$file"
+            fi
+          done < artifacts/changed_files.txt
+
+      - name: Create feature branch for PR
+        run: |
+          BRANCH_NAME="merge-main-to-test-$(date +%Y%m%d%H%M%S)"
+          echo "branch_name=$BRANCH_NAME" >> $GITHUB_ENV
+          git checkout -b $BRANCH_NAME
+          git add .
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+          else
+            git commit -m "Merge changes from main into Test"
+          fi
+          git push origin $BRANCH_NAME
+
+      - name: Create Pull Request
+        id: create_pr
+        run: |
+          PR_URL=$(gh pr create \
+            --base Test \
+            --head ${{ env.branch_name }} \
+            --title "Merge main into Test" \
+            --body "Automated PR to merge main changes into Test branch" \
+            --assignee "neha-jain-git" \
+            --reviewer "neha-jain-git")
+          echo "pr_url=$PR_URL" >> $GITHUB_OUTPUT
+        env:
+          GITHUB_TOKEN: ${{ secrets.PAT_TOKEN }}
+
+      - name: PR created
+        run: |
+          echo "Pull Request created: ${{ steps.create_pr.outputs.pr_url }}"
