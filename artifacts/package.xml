@@ -1,6 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <Package xmlns="http://soap.sforce.com/2006/04/metadata">
-  <!-- A	.github/workflows/Merge main to Test via PR.yml -->
-  <!-- A	Mishika -->
+  <!-- M	Mishika -->
   <version>59.0</version>
 </Package>

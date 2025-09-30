@@ -1,2 +1,4 @@
-A	.github/workflows/Merge main to Test via PR.yml
-A	Mishika
+M	Mishika
+D	artifacts/changed_files.txt
+D	artifacts/destructiveChanges.xml
+D	artifacts/package.xml
