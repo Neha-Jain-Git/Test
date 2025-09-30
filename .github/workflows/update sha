@@ -30,22 +30,3 @@ jobs:
           elif [ "$BASE_BRANCH" = "QA" ]; then
             echo "LAST_GOOD_SHA_main_TO_QA=$MERGE_SHA" >> $GITHUB_ENV
           fi
-
-      - name: Checkout repo
-        uses: actions/checkout@v4
-
-      - name: Save SHA to file
-        run: |
-          mkdir -p .ci
-          if [ -n "$LAST_GOOD_SHA_main_TO_Test" ]; then
-            echo "$LAST_GOOD_SHA_main_TO_Test" > .ci/last_sha_main_to_test.txt
-          fi
-          if [ -n "$LAST_GOOD_SHA_main_TO_QA" ]; then
-            echo "$LAST_GOOD_SHA_main_TO_QA" > .ci/last_sha_main_to_qa.txt
-          fi
-
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add .ci/
-          git commit -m "Update last good SHA for $BASE_BRANCH [skip ci]" || echo "No changes to commit"
-          git push
