@@ -98,8 +98,8 @@ jobs:
             --head ${{ env.branch_name }} \
             --title "Merge main into Test" \
             --body "Automated PR to merge main changes into Test branch" \
-            --assignee "GIT_Admin" \
-            --reviewer "GIT_Admin" \
+            --assignee "neha-jain-git" \
+            --reviewer "neha-jain-git" \
             --label "release-merge")
           echo "pr_url=$PR_URL" >> $GITHUB_OUTPUT
         env:
