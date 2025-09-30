@@ -1,7 +1,7 @@
 name: Merge main to Test via PR
 
 on:
-  workflow_dispatch:  # Manual trigger
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -15,31 +15,27 @@ jobs:
     environment: Test
 
     steps:
-      # Checkout the target branch (Test)
       - name: Checkout target branch (Test)
         uses: actions/checkout@v4
         with:
           ref: Test
           fetch-depth: 0
 
-      # Configure Git
       - name: Configure Git
         run: |
           git config user.email "neha.sforce@gmail.com"
           git config user.name "neha-jain-git"
 
-      # Add remote and fetch main branch
       - name: Add remote and fetch main
         run: |
           git remote add source-origin https://github.com/Neha-Jain-Git/Test.git || true
           git fetch source-origin main
 
-      # Get last merged SHA
       - name: Get last merged SHA
         id: lastsha
-        run: echo "sha=${{ vars.LAST_GOOD_SHA_main_TO_Test }}" >> $GITHUB_OUTPUT
+        run: |
+          echo "sha=${{ vars.LAST_GOOD_SHA_main_TO_Test }}" >> $GITHUB_OUTPUT
 
-      # Find changed files
       - name: Find changed files since last promotion
         id: changes
         run: |
@@ -52,7 +48,6 @@ jobs:
           echo "Changed files:"
           cat artifacts/changed_files.txt
 
-      # Generate package.xml + destructiveChanges.xml
       - name: Generate package.xml and destructiveChanges.xml
         run: |
           mkdir -p artifacts
@@ -67,12 +62,12 @@ jobs:
           awk '$1 == "D" {print "  <!-- " $0 " -->"}' artifacts/changed_files.txt >> artifacts/destructiveChanges.xml
           echo '</Package>' >> artifacts/destructiveChanges.xml
 
-      - uses: actions/upload-artifact@v4
+      - name: Upload delta artifacts
+        uses: actions/upload-artifact@v4
         with:
           name: delta-artifacts
           path: artifacts/*
 
-      # Copy changes (skip deletions)
       - name: Copy changes (skip deletions)
         run: |
           while read status file; do
@@ -82,7 +77,6 @@ jobs:
             fi
           done < artifacts/changed_files.txt
 
-      # Create new branch for PR
       - name: Create feature branch for PR
         run: |
           BRANCH_NAME="merge-main-to-test-$(date +%Y%m%d%H%M%S)"
@@ -96,7 +90,6 @@ jobs:
           fi
           git push origin $BRANCH_NAME
 
-      # Create PR into Test
       - name: Create Pull Request
         id: create_pr
         run: |
@@ -112,6 +105,6 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.PAT_TOKEN }}
 
-      # Output PR link
       - name: PR created
-        run: echo "Pull Request created: ${{ steps.create_pr.outputs.pr_url }}"
+        run: |
+          echo "Pull Request created: ${{ steps.create_pr.outputs.pr_url }}"
