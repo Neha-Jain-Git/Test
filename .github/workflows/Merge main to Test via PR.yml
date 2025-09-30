@@ -98,7 +98,7 @@ jobs:
             --head ${{ env.branch_name }} \
             --title "Merge main into Test" \
             --body "Automated PR to merge main changes into Test branch" \
-            --reviewer "neha-jain-git")
+            --reviewer "prakharomar")
           echo "pr_url=$PR_URL" >> $GITHUB_OUTPUT
         env:
           GITHUB_TOKEN: ${{ secrets.PAT_TOKEN }}
