@@ -1,0 +1,39 @@
+- name: Create feature branch for PR
+        run: |
+          BRANCH_NAME="merge-MALTSSQA-to-RELEASE-$(date +%Y%m%d%H%M%S)"
+          echo "branch_name=$BRANCH_NAME" >> $GITHUB_ENV
+          git checkout -b $BRANCH_NAME
+
+          # Ignore artifacts folder (do not commit it)
+          echo "artifacts/" >> .gitignore
+          git add .gitignore
+
+          # Stage only Salesforce metadata changes
+          git add force-app/main/default/
+
+          if git diff --cached --quiet; then
+            echo "No changes to commit. Skipping PR."
+            echo "skip_pr=true" >> $GITHUB_ENV
+          else
+            git commit -m "Merge changes from MALTSSQA to RELEASE Branch"
+            git push origin $BRANCH_NAME
+          fi
+
+      - name: Create Pull Request
+        if: env.skip_pr != 'true'
+        id: create_pr
+        run: |
+          PR_URL=$(gh pr create \
+            --base RELEASE092025 \
+            --head ${{ env.branch_name }} \
+            --title "Merge changes from MALTSSQA to RELEASE Branch" \
+            --body "Automated PR to merge changes from MALTSSQA to RELEASE Branch (only /force-app/main/default/)" \
+            --reviewer "optum-sgs/maltss_git_admin")
+          echo "pr_url=$PR_URL" >> $GITHUB_OUTPUT
+        env:
+          GITHUB_TOKEN: ${{ secrets.PAT_TOKEN }}
+
+      - name: PR created
+        if: env.skip_pr != 'true'
+        run: |
+          echo "Pull Request created: ${{ steps.create_pr.outputs.pr_url }}"
