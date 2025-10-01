@@ -1,0 +1,109 @@
+name: Create PR to merge MALTSSQA to RELEASE
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  checks: read
+  actions: write
+
+jobs:
+  Merge:
+    runs-on: uhg-runner
+    environment: RELEASE
+    steps:
+      - name: Checkout target branch (RELEASE092025)
+        uses: actions/checkout@v4
+        with:
+          ref: RELEASE092025
+          PAT_TOKEN: ${{ secrets.PAT_TOKEN }}
+          fetch-depth: 0
+
+      - name: Configure Git
+        run: |
+          git config user.email "maltss_tech@optum.com"
+          git config user.name "maltssdeploy"
+
+      - name: Add remote and fetch source branch (MALTSSQA)
+        run: |
+          git remote add source-origin https://x-access-token:${{ secrets.PAT_TOKEN }}@github.com/${{ github.repository }}.git || true
+          git fetch source-origin MALTSSQA
+
+      - name: Get last merged SHA
+        id: lastsha
+        run: echo "sha=${{ vars.LAST_GOOD_SHA_RELEASE_MERGE }}" >> $GITHUB_OUTPUT
+
+      - name: Find changed files since last promotion
+        id: changes
+        run: |
+          mkdir -p artifacts
+          if [ -n "${{ steps.lastsha.outputs.sha }}" ]; then
+            git diff --name-status ${{ steps.lastsha.outputs.sha }} source-origin/MALTSSQA -- force-app/main/default/ > artifacts/changed_files.txt
+          else
+            git diff --name-status origin/RELEASE092025 source-origin/MALTSSQA -- force-app/main/default/ > artifacts/changed_files.txt
+          fi
+          echo "Changed files:"
+          cat artifacts/changed_files.txt
+
+      # Generate package.xml and destructiveChanges.xml based on changes
+      - name: Generate package.xml and destructiveChanges.xml
+        run: |
+          mkdir -p artifacts
+
+          # Generate package.xml for added/modified files
+          echo '<?xml version="1.0" encoding="UTF-8"?>' > artifacts/package.xml
+          echo '<Package xmlns="http://soap.sforce.com/2006/04/metadata">' >> artifacts/package.xml
+          awk '$1 != "D" {print "  <!-- " $0 " -->"}' artifacts/changed_files.txt >> artifacts/package.xml
+          echo '  <version>59.0</version>' >> artifacts/package.xml
+          echo '</Package>' >> artifacts/package.xml
+
+          # Generate destructiveChanges.xml for deleted files
+          echo '<?xml version="1.0" encoding="UTF-8"?>' > artifacts/destructiveChanges.xml
+          echo '<Package xmlns="http://soap.sforce.com/2006/04/metadata">' >> artifacts/destructiveChanges.xml
+          awk '$1 == "D" {print "  <!-- " $0 " -->"}' artifacts/changed_files.txt >> artifacts/destructiveChanges.xml
+          echo '</Package>' >> artifacts/destructiveChanges.xml
+          echo "Generated package.xml:"
+          cat artifacts/package.xml
+          echo "Generated destructiveChanges.xml:"
+          cat artifacts/destructiveChanges.xml
+
+      - name: Copy changes (skip deletions)
+        run: |
+          while read status file; do
+            if [ "$status" = "A" ] || [ "$status" = "M" ]; then
+              mkdir -p "$(dirname "$file")"
+              git show "source-origin/MALTSSQA:$file" > "$file"
+            fi
+          done < artifacts/changed_files.txt
+
+      - name: Create feature branch for PR
+        run: |
+          BRANCH_NAME="merge-MALTSSQA-to-RELEASE-$(date +%Y%m%d%H%M%S)"
+          echo "branch_name=$BRANCH_NAME" >> $GITHUB_ENV
+          git checkout -b $BRANCH_NAME
+          git add .
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+          else
+            git commit -m "Merge changes from MALTSSQA to RELEASE Branch"
+          fi
+          git push origin $BRANCH_NAME
+
+      - name: Create Pull Request
+        id: create_pr
+        run: |
+          PR_URL=$(gh pr create \
+            --base RELEASE092025 \
+            --head ${{ env.branch_name }} \
+            --title "Merge changes from MALTSSQA to RELEASE Branch" \
+            --body "Automated PR to Merge changes from MALTSSQA to RELEASE Branch" \
+            --reviewer "optum-sgs/maltss_git_admin")
+          echo "pr_url=$PR_URL" >> $GITHUB_OUTPUT
+        env:
+          GITHUB_TOKEN: ${{ secrets.PAT_TOKEN }}
+
+      - name: PR created
+        run: |
+          echo "Pull Request created: ${{ steps.create_pr.outputs.pr_url }}"
