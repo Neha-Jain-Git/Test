@@ -6,6 +6,7 @@ on:
 
 permissions:
   contents: write
+  actions: write  # required to update repo variables
 
 jobs:
   generate-and-push-audit-report:
@@ -29,28 +30,59 @@ jobs:
         run: |
           echo "REPORT_DATE=$(date +'%Y-%m-%d')" >> $GITHUB_ENV
 
+      - name: Determine last processed commit
+        run: |
+          if [ -z "${{ vars.LAST_PROCESSED_COMMIT }}" ]; then
+            echo "No LAST_PROCESSED_COMMIT found. Using root commit."
+            value=$(git rev-list --max-parents=0 HEAD)
+          else
+            value=${{ vars.LAST_PROCESSED_COMMIT }}
+          fi
+          echo "LAST_PROCESSED_COMMIT=$value" >> $GITHUB_ENV
+          echo "Last processed commit: $value"
+
+      - name: Check for new commits
+        id: check_commits
+        run: |
+          new_commits=$(git log $LAST_PROCESSED_COMMIT..HEAD --oneline | wc -l)
+          if [ "$new_commits" -eq 0 ]; then
+            echo "No new commits since last run."
+            echo "HAS_NEW_COMMITS=false" >> $GITHUB_ENV
+          else
+            echo "Found $new_commits new commits."
+            echo "HAS_NEW_COMMITS=true" >> $GITHUB_ENV
+          fi
+
       - name: Generate commit audit report
+        if: env.HAS_NEW_COMMITS == 'true'
         run: |
           echo "Generating commit audit report..."
           mkdir -p temp
           echo "COMMIT ID,MEMBER EMAIL,DATETIME (IST),COMMENTS,NUMBER OF FILES,NUMBER OF ADDITIONS,NUMBER OF DELETIONS" > temp/AuditReport1.csv
-          git log --since="24 hours ago" --pretty=format:'"%H","%ae","%aD","%s",' --shortstat --no-merges | paste - - - >> temp/AuditReport1.csv
+          git log $LAST_PROCESSED_COMMIT..HEAD --pretty=format:'"%H","%ae","%aD","%s",' --shortstat --no-merges | paste - - - >> temp/AuditReport1.csv
           echo "FILES" > temp/AuditReport2.csv
-          git log --since="24 hours ago" --name-only --pretty=format:"" > temp/AuditReport3.csv
+          git log $LAST_PROCESSED_COMMIT..HEAD --name-only --pretty=format:"" > temp/AuditReport3.csv
           awk 'NF {TMP=TMP $0; next} {print TMP " "; TMP=" "} END {print TMP " "}' temp/AuditReport3.csv > temp/AuditReport4.csv
           sed -r '/^\s*$/d' temp/AuditReport4.csv > temp/AuditReport5.csv
           paste temp/AuditReport5.csv >> temp/AuditReport2.csv
           paste -d , temp/AuditReport1.csv temp/AuditReport2.csv > temp/AuditReport.csv
           cp temp/AuditReport.csv $REPORT_FILE
 
-      - name: Save latest commit SHA
+      - name: Save latest commit SHA to repo variable
+        if: env.HAS_NEW_COMMITS == 'true'
         run: |
-          lastcommitid=$(git log -1 --pretty=format:"%H")
-          echo "LAST_COMMIT_ID=$lastcommitid" >> $GITHUB_ENV
-          echo "Last commit SHA saved: $lastcommitid"
+          latest=$(git log -1 --pretty=format:"%H")
+          echo "Updating repository variable LAST_PROCESSED_COMMIT to $latest"
+          gh api \
+            -X PATCH \
+            repos/${{ github.repository }}/actions/variables/LAST_PROCESSED_COMMIT \
+            -f name='LAST_PROCESSED_COMMIT' \
+            -f value="$latest"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Send Email with Attachment
-        if: always()
+        if: env.HAS_NEW_COMMITS == 'true'
         uses: uhg-pipelines/epl-send-mail@v1
         with:
           subject: "Daily Commit Audit Report - ${{ env.REPORT_DATE }} :: ${{ github.workflow }}"
@@ -78,12 +110,13 @@ jobs:
             *This is an automated email. Please do not reply directly.*
 
       - name: Commit and push report to main
+        if: env.HAS_NEW_COMMITS == 'true'
         run: |
           echo "Workflow name is: ${{ github.workflow }}"
           git add $REPORT_FILE
           if git diff --cached --quiet; then
             echo "No changes to commit"
           else
-            git commit -m "Auto-generated audit report (Commit Ref: $LAST_COMMIT_ID)"
+            git commit -m "Auto-generated audit report (Commit Ref: $LAST_PROCESSED_COMMIT)"
             git push https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }} HEAD:main
           fi
