@@ -102,16 +102,16 @@ jobs:
                 type: "text/plain",
                 value: `Dear Team,
 
-Please find attached the Daily Commit Audit Report generated automatically by GitHub Actions on ${process.env.REPORT_DATE}.
+                  Please find attached the Daily Commit Audit Report generated automatically by GitHub Actions on ${process.env.REPORT_DATE}.
 
-This report provides a consolidated record of repository activities within the last 24 hours. It is shared to ensure transparency, compliance, and effective monitoring of codebase changes.
+                  This report provides a consolidated record of repository activities within the last 24 hours. It is shared to ensure transparency, compliance, and effective monitoring of codebase changes.
 
-Regards,
-GitHub Actions Bot
-On behalf of the DevOps Team
-
----
-This is an automated email. Please do not reply directly.`
+                  Regards,
+                  GitHub Actions Bot
+                  On behalf of the DevOps Team
+                  
+                  ---
+                  This is an automated email. Please do not reply directly.`
               }],
               attachments: [{
                 content: fileContent,
