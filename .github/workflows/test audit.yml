@@ -84,8 +84,6 @@ jobs:
       - name: Email report via SendGrid API
         if: env.HAS_NEW_COMMITS == 'true'
         uses: actions/github-script@v7
-        env:
-          SENDGRID_API_KEY: ${{ secrets.SENDGRID_API_KEY }}
         with:
           script: |
             const fs = require("fs");
@@ -137,6 +135,8 @@ This is an automated email. Please do not reply directly.`
             } else {
               console.log("✅ Email sent successfully via SendGrid");
             }
+        env:
+          SENDGRID_API_KEY: ${{ secrets.SENDGRID_API_KEY }}
 
       - name: Commit and push report to main
         if: env.HAS_NEW_COMMITS == 'true'
@@ -148,4 +148,3 @@ This is an automated email. Please do not reply directly.`
           else
             git commit -m "Auto-generated audit report (Commit Ref: $LAST_PROCESSED_COMMIT)"
             git push https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }} HEAD:main
-          fi
