@@ -1,0 +1,76 @@
+name: Generate Audit Report
+
+on:
+  schedule: 
+  - cron: '30 4 * * *' # Every day at 4:30 AM UTC 
+
+permissions:
+  contents: write
+
+jobs:
+  generate-and-push-audit-report:
+    runs-on: uhg-runner
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: main
+
+      - name: Set up Git user
+        run: |
+          git config user.email "maltss_tech@optum.com"
+          git config user.name "maltssdeploy"
+
+      - name: Generate commit audit report
+        run: |
+          echo "Reading last processed commit..."
+          if [ -f git-commit-version-MALTSSPROD.txt ]; then
+            value=$(<git-commit-version-MALTSSPROD.txt)
+            if ! git cat-file -e "$value"; then
+              echo "Invalid or missing commit. Falling back to root."
+              value=$(git rev-list --max-parents=0 HEAD)
+            fi
+          else
+            echo "No previous commit file found, using root commit"
+            value=$(git rev-list --max-parents=0 HEAD)
+          fi
+          echo "Last commit ID: $value"
+          mkdir -p temp
+          echo "COMMIT ID,MEMBER EMAIL,DATETIME (IST),COMMENTS,NUMBER OF FILES,NUMBER OF ADDITIONS,NUMBER OF DELETIONS" > temp/AuditReport1.csv
+          git log --since="24 hours ago" --pretty=format:'"%H","%ae","%aD","%s",' --shortstat --no-merges | paste - - - >> temp/AuditReport1.csv
+          echo "FILES" >temp/AuditReport2.csv
+          git log --since="24 hours ago" --name-only --pretty=format:"" > temp/AuditReport3.csv
+          awk 'NF {TMP=TMP $0; next} {print TMP " "; TMP=" "} END {print TMP " "}' temp/AuditReport3.csv > temp/AuditReport4.csv
+          sed -r '/^\s*$/d' temp/AuditReport4.csv > temp/AuditReport5.csv
+          paste temp/AuditReport5.csv >> temp/AuditReport2.csv
+          paste -d , temp/AuditReport1.csv temp/AuditReport2.csv > temp/AuditReport.csv
+          reportValue=$(<temp/AuditReport.csv)          
+          echo "$reportValue" > AuditReport_$(date +'%Y-%m-%d').csv
+          attachfile="AuditReport_$(date +'%Y-%m-%d').csv"
+
+- name: Send Email with Attachment
+        if: always()
+        uses: uhg-pipelines/epl-send-mail@v1
+        with:
+          subject: "Automation Run Completed for ::  ${{github.workflow}}"
+          to: neha_jain@optum.com
+          from: notifications@github.com
+          attachments: | 
+            AuditReport_$(date +'%Y-%m-%d').csv
+          body: |
+            Hello Neha,
+              PFA audit report
+            Regards
+            GitHub Actions
+
+      - name: Commit and push report to main
+        run: |
+          lastcommitid=$(git log -1 --pretty=format:"%H")
+          echo "$lastcommitid" > git-commit-version-MALTSSPROD.txt
+          echo "Workflow name is: ${{github.workflow}}"
+          #git add temp 
+          git add git-commit-version-MALTSSPROD.txt AuditReport_$(date +'%Y-%m-%d').csv
+          git commit -m "Auto-generated audit report"
+          git push https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }} HEAD:main
+
