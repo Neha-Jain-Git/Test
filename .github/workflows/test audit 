@@ -1,0 +1,151 @@
+name: Generate Audit Report
+
+on:
+  schedule:
+    - cron: '30 9 * * *' # Runs daily at 4:30 AM EST (fixed, no DST adjustment)
+  workflow_dispatch: {}   # Manual trigger
+
+permissions:
+  contents: write
+  actions: write  # required to update repo variables via GH API
+
+jobs:
+  generate-and-push-audit-report:
+    runs-on: ubuntu-latest
+    env:
+      REPORT_FILE: AuditReport_${{ github.run_id }}.csv
+
+    steps:
+      - name: Checkout code (main)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: main
+
+      - name: Configure Git author
+        run: |
+          git config user.email "maltss_tech@optum.com"
+          git config user.name "maltssdeploy"
+
+      - name: Set Report Date
+        run: |
+          echo "REPORT_DATE=$(date +'%Y-%m-%d')" >> $GITHUB_ENV
+
+      - name: Determine last processed commit
+        run: |
+          if [ -z "${{ vars.LAST_PROCESSED_COMMIT }}" ]; then
+            echo "No LAST_PROCESSED_COMMIT variable found. Using repository root commit."
+            value=$(git rev-list --max-parents=0 HEAD)
+          else
+            value=${{ vars.LAST_PROCESSED_COMMIT }}
+          fi
+          echo "LAST_PROCESSED_COMMIT=$value" >> $GITHUB_ENV
+          echo "Last processed commit: $value"
+
+      - name: Check for new commits
+        run: |
+          new_commits=$(git log "$LAST_PROCESSED_COMMIT"..HEAD --oneline | wc -l)
+          if [ "$new_commits" -eq 0 ]; then
+            echo "No new commits since last run."
+            echo "HAS_NEW_COMMITS=false" >> $GITHUB_ENV
+          else
+            echo "Found $new_commits new commits."
+            echo "HAS_NEW_COMMITS=true" >> $GITHUB_ENV
+          fi
+
+      - name: Generate commit audit report
+        if: env.HAS_NEW_COMMITS == 'true'
+        run: |
+          echo "Generating commit audit report..."
+          mkdir -p temp
+          echo "COMMIT ID,MEMBER EMAIL,DATETIME (IST),COMMENTS,NUMBER OF FILES,NUMBER OF ADDITIONS,NUMBER OF DELETIONS" > temp/AuditReport1.csv
+          git log "$LAST_PROCESSED_COMMIT"..HEAD --pretty=format:'"%H","%ae","%aD","%s",' --shortstat --no-merges | paste - - - >> temp/AuditReport1.csv
+          echo "FILES" > temp/AuditReport2.csv
+          git log "$LAST_PROCESSED_COMMIT"..HEAD --name-only --pretty=format:"" > temp/AuditReport3.csv
+          awk 'NF {TMP=TMP $0; next} {print TMP " "; TMP=" "} END {print TMP " "}' temp/AuditReport3.csv > temp/AuditReport4.csv
+          sed -r '/^\s*$/d' temp/AuditReport4.csv > temp/AuditReport5.csv
+          paste temp/AuditReport5.csv >> temp/AuditReport2.csv
+          paste -d , temp/AuditReport1.csv temp/AuditReport2.csv > temp/AuditReport.csv
+          cp temp/AuditReport.csv "$REPORT_FILE"
+
+      - name: Update LAST_PROCESSED_COMMIT repo variable
+        if: env.HAS_NEW_COMMITS == 'true'
+        run: |
+          latest=$(git log -1 --pretty=format:"%H")
+          echo "Updating repository variable LAST_PROCESSED_COMMIT to $latest"
+          gh api \
+            -X PATCH \
+            "repos/${{ github.repository }}/actions/variables/LAST_PROCESSED_COMMIT" \
+            -f name='LAST_PROCESSED_COMMIT' \
+            -f value="$latest"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Email report via SendGrid API
+        if: env.HAS_NEW_COMMITS == 'true'
+        uses: actions/github-script@v7
+        env:
+          SENDGRID_API_KEY: ${{ secrets.SENDGRID_API_KEY }}
+        with:
+          script: |
+            const fs = require("fs");
+            const fetch = require("node-fetch");
+
+            const filePath = process.env.REPORT_FILE;
+            const fileContent = fs.readFileSync(filePath).toString("base64");
+
+            const body = {
+              personalizations: [
+                { to: [{ email: "neha.sforce@gmail.com" }] }
+              ],
+              from: { email: "notifications@github.com" },
+              subject: `Daily Commit Audit Report - ${process.env.REPORT_DATE} :: ${process.env.GITHUB_WORKFLOW}`,
+              content: [{
+                type: "text/plain",
+                value: `Dear Team,
+
+Please find attached the Daily Commit Audit Report generated automatically by GitHub Actions on ${process.env.REPORT_DATE}.
+
+This report provides a consolidated record of repository activities within the last 24 hours. It is shared to ensure transparency, compliance, and effective monitoring of codebase changes.
+
+Regards,
+GitHub Actions Bot
+On behalf of the DevOps Team
+
+---
+This is an automated email. Please do not reply directly.`
+              }],
+              attachments: [{
+                content: fileContent,
+                filename: filePath,
+                type: "text/csv",
+                disposition: "attachment"
+              }]
+            };
+
+            const res = await fetch("https://api.sendgrid.com/v3/mail/send", {
+              method: "POST",
+              headers: {
+                "Authorization": `Bearer ${process.env.SENDGRID_API_KEY}`,
+                "Content-Type": "application/json"
+              },
+              body: JSON.stringify(body)
+            });
+
+            if (!res.ok) {
+              throw new Error(`SendGrid API failed: ${res.status} ${await res.text()}`);
+            } else {
+              console.log("✅ Email sent successfully via SendGrid");
+            }
+
+      - name: Commit and push report to main
+        if: env.HAS_NEW_COMMITS == 'true'
+        run: |
+          echo "Workflow name is: ${{ github.workflow }}"
+          git add "$REPORT_FILE"
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "Auto-generated audit report (Commit Ref: $LAST_PROCESSED_COMMIT)"
+            git push https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }} HEAD:main
+          fi
