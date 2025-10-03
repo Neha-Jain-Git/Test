@@ -86,11 +86,13 @@ jobs:
         run: |
           echo "Workflow name is: ${{ github.workflow }}"
           git add "$REPORT_FILE"
+
           if git diff --cached --quiet; then
             echo "No changes to commit"
           else
             git commit -m "Auto-generated audit report (Commit Ref: $LAST_PROCESSED_COMMIT)"
             git push https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }} HEAD:main
+          fi
 
       - name: Upload Audit Report as artifact
         if: env.HAS_NEW_COMMITS == 'true'
