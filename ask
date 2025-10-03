@@ -1,0 +1,40 @@
+1. Validate to Prod Script -- Refer email from Chandra
+	- Generate the AsyncResultId
+	- Save AsyncID to environment variable
+	- Validate the CR
+		- Change Start Date between (currentdate and current date + 24hrs)
+		- State==Approved
+		- Assignment Group==e1593c734f65fe80648a8e1f0210c763
+	- Run Test Classes
+	- DO NOT DEPLOY THE CHANGES
+	- Send Email to leads
+	- Should be run by only Sahil & Sridhar
+2. Deploy to Prod Script -- Refer email from Chandra
+	- Retrieve the AsyncResultId
+	- Validate the CR
+		- currentdate between (Change Start Date and Change End Date)
+		- State==Work In Progress or Approved to Implement
+		- Assignment Group==e1593c734f65fe80648a8e1f0210c763
+	- Start the quickdeploy
+	- Send Email to leads
+	- Should be run by only Release Team (Shikha, Chandra & Brajesh)
+
+Email from Chandra:
+Once the NPM restriction is lifted,
+Try below in LTSSDEV using github actions. So this way we can have validation for change ticket to prior to actual deployment.
+
+Steps to Invoke Quick Deploy Programmatically
+1.	Run a Validation Deployment
+Use the Metadata API to deploy your components with checkOnly=true. This validates the deployment without actually applying changes.
+2.	Capture the AsyncResultId
+After validation, Salesforce returns an AsyncResultId which you’ll use for Quick Deploy.
+3.	Invoke Quick Deploy
+Use the QuickDeploy operation on the Metadata API with the AsyncResultId from the validation step.
+________________________________________
+📘 Example Using Salesforce CLI 
+Shell
+sfdx force:mdapi:deploy -d path/to/metadata -u targetOrg -c -w -1
+# -c means checkOnly (validation)
+# -w -1 means wait until validation completes
+# Then use Quick Deploy
+sfdx force:mdapi:deploy:quick -i  -u targetOrg
