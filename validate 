@@ -1,0 +1,113 @@
+# -------------------------------------------------------------
+# Salesforce Validation to Production (Pre-Deploy Check)
+# -------------------------------------------------------------
+name: Validate to Production
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+env:
+  environment: PROD
+  SF_PROD_AUTH_URL: ${{ secrets.SF_PROD_AUTH_URL }}
+  PAT_TOKEN: ${{ secrets.PAT_TOKEN }}
+  SNOW_INSTANCE: optum.service-now.com
+  SNOW_USER: ${{ vars.SNOW_USER_NAME }}
+  SNOW_PASSWORD: ${{ secrets.SNOW_PASSWORD }}
+  ASSIGNMENT_GROUP_NAME: 'e1593c734f65fe80648a8e1f0210c763'
+  VARIABLE_NAME: LAST_VALIDATION_ASYNC_ID
+
+jobs:
+  validate-to-prod:
+    runs-on: ubuntu-latest
+    environment: PROD
+    if: github.actor == 'sahil-github-id' || github.actor == 'sridhar-github-id'
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Validate Change Request in SNOW
+        id: cr-check
+        run: |
+          RESPONSE=$(curl -s -X GET "https://${SNOW_INSTANCE}/api/now/table/change_request?sysparm_query=assignment_group=${ASSIGNMENT_GROUP_NAME}^state=3^start_dateBETWEENjavascript:gs.now()@javascript:gs.daysAgoEnd(-1)&sysparm_fields=number,state,short_description" \
+            -u "$SNOW_USER:$SNOW_PASSWORD" -H "Accept: application/json")
+
+          COUNT=$(echo "$RESPONSE" | jq -r '.result | length')
+          if [ "$COUNT" -eq 0 ]; then
+            echo "No approved CR found in next 24 hrs."
+            exit 1
+          fi
+
+          CR_NUMBER=$(echo "$RESPONSE" | jq -r '.result[0].number')
+          CR_STATE=$(echo "$RESPONSE" | jq -r '.result[0].state')
+          echo "CR_NUMBER=$CR_NUMBER" >> $GITHUB_ENV
+          echo "CR_STATE=$CR_STATE" >> $GITHUB_ENV
+          echo "CR validation passed for $CR_NUMBER ($CR_STATE)"
+
+      - name: Install Salesforce CLI
+        run: |
+          wget https://developer.salesforce.com/media/salesforce-cli/sf/channels/stable/sf-linux-x64.tar.xz
+          mkdir ~/sfdx && tar xJf sf-linux-x64.tar.xz -C ~/sfdx --strip-components 1
+          echo "$HOME/sfdx/bin" >> $GITHUB_PATH
+          sf version
+
+      - name: Auth to Salesforce
+        run: |
+          echo "${{ secrets.SF_PROD_AUTH_URL }}" > ./auth.txt
+          sf org login sfdx-url --sfdx-url-file ./auth.txt --alias prod --set-default
+
+      - name: Run Validation Deployment (checkOnly)
+        id: validate
+        run: |
+          if ! sf project deploy start --metadata-dir force-app \
+            --target-org prod --check-only --wait 500 --test-level RunSpecifiedTests --json > result.json; then
+              echo "Validation failed."
+              exit 1
+          fi
+          ASYNC_ID=$(jq -r '.result.id' result.json)
+          echo "ASYNC_ID=$ASYNC_ID" >> $GITHUB_ENV
+
+      - name: Save AsyncResultId to GitHub Environment Variable
+        if: success()
+        env:
+          OWNER: ${{ github.repository_owner }}
+          REPO: ${{ github.event.repository.name }}
+          GITHUB_TOKEN: ${{ secrets.PAT_TOKEN }}
+        run: |
+          curl -s -X PATCH \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $GITHUB_TOKEN" \
+            https://api.github.com/repos/$OWNER/$REPO/environments/$environment/variables/$VARIABLE_NAME \
+            -d "{\"name\":\"$VARIABLE_NAME\",\"value\":\"$ASYNC_ID\"}"
+
+      - name: Send Success Email
+        if: success()
+        uses: uhg-pipelines/epl-send-mail@v1
+        with:
+          subject: "Validation to Production Successful"
+          to: leads@optum.com
+          from: "donotreply@optum.com"
+          body: |
+            ✅ Validation completed successfully.
+
+            Change Request: ${{ env.CR_NUMBER }}
+            Status: ${{ env.CR_STATE }}
+            AsyncResultId: ${{ env.ASYNC_ID }}
+
+      - name: Send Failure Email
+        if: failure()
+        uses: uhg-pipelines/epl-send-mail@v1
+        with:
+          subject: "Validation to Production Failed"
+          to: leads@optum.com
+          from: "donotreply@optum.com"
+          body: |
+            ❌ Validation failed.
+
+            Change Request: ${{ env.CR_NUMBER || 'N/A' }}
+            Status: ${{ env.CR_STATE || 'N/A' }}
+            Please check ServiceNow CR or Salesforce validation logs.
