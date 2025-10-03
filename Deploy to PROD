@@ -1,0 +1,275 @@
+# -------------------------------------------------------------
+# Salesforce Deployment Workflow (Production)
+# -------------------------------------------------------------
+# Purpose:
+#   - Triggered manually via workflow_dispatch.
+#   - Deployment will be done only after there is an approved CR in SNOW 
+#   - Test Classes will be validated
+#
+# Why repository_dispatch was used earlier:
+#   - Some bot merges or GITHUB_TOKEN limitations may skip workflows. 
+#   - Using a Personal Access Token (PAT) gives required permissions 
+#     for updating environment variables and ensuring reliability.
+#
+# Flow:
+#   1. Checkout code
+#   2. Create delta package (sfdx-git-delta)
+#   3. Deploy to Salesforce Sandbox
+#   4. Send email notification if deployment fails (grouped by file)
+#   5. Save last successful SHA on successful deploy
+# -------------------------------------------------------------
+name: Deploy to Production
+on:
+  workflow_dispatch:
+  
+permissions:
+  contents: write
+  pull-requests: write
+  checks: read
+  actions: write
+
+env:
+  environment: PROD
+  SF_PROD_AUTH_URL: ${{ secrets.SF_PROD_AUTH_URL }}
+  PAT_TOKEN: ${{ secrets.PAT_TOKEN }}
+  SNOW_INSTANCE: optum.service-now.com
+  SNOW_USER: ${{ vars.SNOW_USER_NAME }}
+  SNOW_PASSWORD: ${{ secrets.SNOW_PASSWORD }}
+  ASSIGNMENT_GROUP_NAME: 'e1593c734f65fe80648a8e1f0210c763'
+
+jobs:
+  verify_cr:
+    name: Check Approved CR
+    runs-on: uhg-runner
+    environment: PROD
+    outputs:
+      Approved_CR: ${{ steps.check_cr.outputs.Approved_CR }}
+
+    steps:
+      - name: Query ServiceNow for Approved CR
+        id: check_cr
+        run: |
+          # Query approved CRs assigned to this group
+          RESPONSE=$(curl -s -X GET "https://${SNOW_INSTANCE}/api/now/table/change_request?sysparm_query=assignment_group=${ASSIGNMENT_GROUP_NAME}^stateIN3,4&sysparm_fields=number,state,short_description&sysparm_limit=2" \
+            -u "$SNOW_USER:$SNOW_PASSWORD" \
+            -H "Accept: application/json" )
+            
+          MATCHING_CR=$(echo "$RESPONSE" | jq -r '.result | length')
+          if [ "$MATCHING_CR" -eq 0 ]; then
+            echo " No approved change request found for group $ASSIGNMENT_GROUP_NAME"
+            echo "Approved_CR=Failed" >> $GITHUB_OUTPUT
+            #exit 1
+          else
+            echo " Found $MATCHING_CR approved Change Request(s) for group $ASSIGNMENT_GROUP_NAME)"
+            echo "Approved_CR=Succeeded" >> $GITHUB_OUTPUT
+            echo "$RESPONSE"
+            echo "Proceeding with deployment..."
+          fi
+          
+  Send-Email:
+    runs-on: uhg-runner
+    environment: PROD
+    needs: verify_cr
+    if: needs.verify_cr.outputs.Approved_CR == 'Failed' 
+    steps:
+      - name: Send Email on Failure
+        uses: uhg-pipelines/epl-send-mail@v1
+        with:
+          subject: "Production Deployment Failed"
+          to: default-notify@optum.com
+          cc: neha_jain@optum.com 
+          from: "donotreply@optum.com"
+          body: |
+            The deployment to Production failed due to the following issues:
+            No approved change request found.
+
+  deploy-to-prod:
+    runs-on: uhg-runner
+    environment: PROD
+    needs: verify_cr
+    if: needs.verify_cr.outputs.Approved_CR == 'Succeeded'    
+    outputs:
+      deploy_status: ${{ steps.deploy.outputs.deploy_status }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Salesforce CLI
+        run: |
+          wget https://developer.salesforce.com/media/salesforce-cli/sf/channels/stable/sf-linux-x64.tar.xz
+          mkdir ~/sfdx
+          tar xJf sf-linux-x64.tar.xz -C ~/sfdx --strip-components 1
+          echo "$HOME/sfdx/bin" >> $GITHUB_PATH
+          export PATH=$HOME/sfdx/bin:$PATH
+          sf version
+
+      - name: Populate auth file with SF_AUTH secret
+        run: |
+          echo "${{ secrets.SF_PROD_AUTH_URL }}" > ./AUTHURL.txt
+          if [ $(wc -c < "./AUTHURL.txt") -le 1 ]; then
+            echo "Missing AUTHURL secret"
+            exit 1
+          fi
+
+      - name: Authenticate to the Org
+        run: sf org login sfdx-url --sfdx-url-file ./AUTHURL.txt --set-default --alias thisOrg
+
+      - name: Install sfdx git delta
+        run: echo y | sf plugins install sfdx-git-delta
+
+      - name: Create delta package
+        run: |
+          mkdir -p build/temp/changed-sources
+          echo GOOD_SHA: "${{ vars.LAST_GOOD_SHA_PROD }}"
+          sf sgd source delta --from "${{ vars.LAST_GOOD_SHA_PROD }}" --to "origin/main" \
+            --output-dir build/temp/changed-sources/ --generate-delta --source-dir force-app/ --ignore-file .gitignore
+          find build/temp/changed-sources/ -type d -empty -delete
+          zip -r build/temp/changed-sources.zip build/temp/changed-sources/
+
+      - name: Display package.xml
+        run: |
+          echo "Contents of package.xml:"
+          cat build/temp/changed-sources/package/package.xml
+          
+      - name: Upload zip artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: changed-sources
+          path: build/temp/changed-sources.zip
+
+      - name: Remove destructiveChanges.xml
+        run: |
+          cat build/temp/changed-sources/destructiveChanges/destructiveChanges.xml
+          rm -f build/temp/changed-sources/destructiveChanges/destructiveChanges.xml
+          
+      - name: Deploy to Sandbox
+        id: deploy
+        run: |
+          echo "Starting Salesforce Deployment"
+          if ! sf project deploy start \
+            --source-dir build/temp/changed-sources/ \
+            --target-org thisOrg \
+            --wait 500 \
+            --json \
+            --check-only \
+            --test-level RunSpecifiedTests \
+            --verbose > deploy-result.json 2> deploy-error.log; then
+            if grep -q '"name": "NothingToDeploy"' deploy-result.json; then
+              echo "No changes to deploy. Skipping..."
+              exit 0
+            fi
+            echo "Deployment failed."
+            echo "deploy_status=Failed" >> $GITHUB_OUTPUT
+          else
+            echo "Deployment succeeded."
+            echo "deploy_status=Succeeded" >> $GITHUB_OUTPUT
+          fi
+      - name: Upload deployment result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: deploy-result
+          path: deploy-result.json
+
+  Send_Email_Notification:
+    runs-on: uhg-runner
+    environment: PROD
+    needs: deploy-to-prod
+    if: needs.deploy-to-prod.outputs.deploy_status == 'Failed'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download deployment result
+        uses: actions/download-artifact@v4
+        with:
+          name: deploy-result
+
+      - name: Extract Grouped Errors
+        id: grouped
+        run: |
+          jq -r '.result.details.componentFailures[]? | "\(.fileName): \(.problem)"' deploy-result.json \
+            | grep -v null > file-errors.txt || true
+          
+          if [ -s file-errors.txt ]; then
+            awk -F': ' '
+              {
+                file=$1
+                error=$2
+                if (file != lastFile) {
+                  count++
+                  if (count > 1) print ""
+                  print count ". " file
+                  lastFile=file
+                  errorCount=0
+                }
+                errorCount++
+                print "   " count "." errorCount ") " error
+              }
+            ' file-errors.txt > grouped-errors.txt
+          else
+            echo "No errors found." > grouped-errors.txt
+          fi
+
+          echo "grouped=$(sed ':a;N;$!ba;s/\n/\\n/g' grouped-errors.txt)" >> $GITHUB_OUTPUT
+
+      - name: Send Email on Failure
+        uses: uhg-pipelines/epl-send-mail@v1
+        with:
+          subject: "Build Failure - Your files caused errors"
+          to: brajesh_tiwary@optum.com, chandrasekhar_uppalapati@optum.com, gopal_shakti@optum.com, shikha_devi@optum.com
+          cc: neha_jain@optum.com 
+          from: "donotreply@optum.com"
+          body: |
+            The deployment to Production failed due to the following issues:
+            
+            ${{ steps.grouped.outputs.grouped }}
+            
+  save_last_good_sha:
+    runs-on: uhg-runner
+    environment: PROD
+    needs: deploy-to-prod
+    if: needs.deploy-to-prod.outputs.deploy_status == 'Succeeded'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Update LAST_GOOD_SHA_PROD environment variable
+        env:
+          GITHUB_TOKEN: ${{ secrets.PAT_TOKEN }}
+          OWNER: ${{ github.repository_owner }}
+          REPO: ${{ github.event.repository.name }}
+          ENV_NAME: PROD
+          VARIABLE_NAME: LAST_GOOD_SHA_PROD
+          SHA: ${{ github.sha }}
+        run: |
+          echo "Updating $VARIABLE_NAME in environment $ENV_NAME with SHA=$SHA"
+      
+          # Try to update (PATCH)
+          RESPONSE=$(curl -s -o response.json -w "%{http_code}" \
+            -X PATCH \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $GITHUB_TOKEN" \
+            https://api.github.com/repos/$OWNER/$REPO/environments/$ENV_NAME/variables/$VARIABLE_NAME \
+            -d "{\"name\":\"$VARIABLE_NAME\",\"value\":\"$SHA\"}")
+      
+          if [ "$RESPONSE" -eq 404 ]; then
+            echo "Variable not found, creating instead..."
+            RESPONSE=$(curl -s -o response.json -w "%{http_code}" \
+              -X POST \
+              -H "Accept: application/vnd.github+json" \
+              -H "Authorization: Bearer $GITHUB_TOKEN" \
+              https://api.github.com/repos/$OWNER/$REPO/environments/$ENV_NAME/variables \
+              -d "{\"name\":\"$VARIABLE_NAME\",\"value\":\"$SHA\"}")
+          fi
+      
+          echo "HTTP Response: $RESPONSE"
+          cat response.json
