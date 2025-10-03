@@ -79,7 +79,7 @@ jobs:
             -f name='LAST_PROCESSED_COMMIT' \
             -f value="$latest"
         env:
-          GITHUB_TOKEN: ${{ secrets.PAT_FOR_VARS }}
+          GH_TOKEN: ${{ secrets.PAT_TOKEN }}
 
       - name: Commit and push report to main
         if: env.HAS_NEW_COMMITS == 'true'
