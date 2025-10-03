@@ -6,11 +6,10 @@ on:
   workflow_dispatch: {}   # Manual trigger
 
 permissions:
-  contents: write
-  actions: write
+  actions: write   # needed to update repo variables via GH API
 
 jobs:
-  generate-and-push-audit-report:
+  generate-and-save-audit-report:
     runs-on: ubuntu-latest
     env:
       REPORT_FILE: AuditReport_${{ github.run_id }}.csv
@@ -41,7 +40,6 @@ jobs:
           fi
           echo "LAST_PROCESSED_COMMIT=$value" >> $GITHUB_ENV
 
-      # <<< CHANGED: New step to filter commits/files to force-app/main/default only >>>
       - name: Check for changes in force-app/main/default
         run: |
           changed_files=$(git diff --name-only "$LAST_PROCESSED_COMMIT"..HEAD -- force-app/main/default/ || true)
@@ -70,7 +68,6 @@ jobs:
           paste -d , temp/AuditReport1.csv temp/AuditReport2.csv > temp/AuditReport.csv
           cp temp/AuditReport.csv "$REPORT_FILE"
 
-      # <<< CHANGED: Only update repo variable if HAS_CHANGES is true >>>
       - name: Update LAST_PROCESSED_COMMIT repo variable
         if: env.HAS_CHANGES == 'true'
         run: |
@@ -84,22 +81,10 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.PAT_TOKEN }}
 
-      - name: Commit and push report to main
-        if: env.HAS_CHANGES == 'true'
-        run: |
-          echo "Workflow name is: ${{ github.workflow }}"
-          git add "$REPORT_FILE"
-
-          if git diff --cached --quiet; then
-            echo "No changes to commit"
-          else
-            git commit -m "Auto-generated audit report (Commit Ref: $LAST_PROCESSED_COMMIT)"
-            git push https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }} HEAD:main
-          fi
-
       - name: Upload Audit Report as artifact
         if: env.HAS_CHANGES == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: audit-report-${{ env.REPORT_DATE }}
           path: ${{ env.REPORT_FILE }}
+          retention-days: 90   # <<< CHANGED: keep artifact for 90 days
