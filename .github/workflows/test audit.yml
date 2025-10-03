@@ -6,8 +6,8 @@ on:
   workflow_dispatch: {}   # Manual trigger
 
 permissions:
-  contents: write   # needed for git push
-  actions: write    # needed to update repo variables via GH API
+  contents: write
+  actions: write
 
 jobs:
   generate-and-push-audit-report:
@@ -40,38 +40,41 @@ jobs:
             value=${{ vars.LAST_PROCESSED_COMMIT }}
           fi
           echo "LAST_PROCESSED_COMMIT=$value" >> $GITHUB_ENV
-          echo "Last processed commit: $value"
 
-      - name: Check for new commits
+      # <<< CHANGED: New step to filter commits/files to force-app/main/default only >>>
+      - name: Check for changes in force-app/main/default
         run: |
-          new_commits=$(git log "$LAST_PROCESSED_COMMIT"..HEAD --oneline | wc -l)
-          if [ "$new_commits" -eq 0 ]; then
-            echo "No new commits since last run."
-            echo "HAS_NEW_COMMITS=false" >> $GITHUB_ENV
+          changed_files=$(git diff --name-only "$LAST_PROCESSED_COMMIT"..HEAD -- force-app/main/default/ || true)
+          if [ -z "$changed_files" ]; then
+            echo "No changes in force-app/main/default since last run."
+            echo "HAS_CHANGES=false" >> $GITHUB_ENV
           else
-            echo "Found $new_commits new commits."
-            echo "HAS_NEW_COMMITS=true" >> $GITHUB_ENV
+            echo "Found changes in force-app/main/default:"
+            echo "$changed_files"
+            echo "HAS_CHANGES=true" >> $GITHUB_ENV
           fi
 
       - name: Generate commit audit report
-        if: env.HAS_NEW_COMMITS == 'true'
+        if: env.HAS_CHANGES == 'true'
         run: |
           echo "Generating commit audit report..."
           mkdir -p temp
           echo "COMMIT ID,MEMBER EMAIL,DATETIME (IST),COMMENTS,NUMBER OF FILES,NUMBER OF ADDITIONS,NUMBER OF DELETIONS" > temp/AuditReport1.csv
-          git log "$LAST_PROCESSED_COMMIT"..HEAD --pretty=format:'"%H","%ae","%aD","%s",' --shortstat --no-merges | paste - - - >> temp/AuditReport1.csv
+          git log "$LAST_PROCESSED_COMMIT"..HEAD -- force-app/main/default/ \
+            --pretty=format:'"%H","%ae","%aD","%s",' --shortstat --no-merges | paste - - - >> temp/AuditReport1.csv
           echo "FILES" > temp/AuditReport2.csv
-          git log "$LAST_PROCESSED_COMMIT"..HEAD --name-only --pretty=format:"" > temp/AuditReport3.csv
+          git log "$LAST_PROCESSED_COMMIT"..HEAD --name-only --pretty=format:"" -- force-app/main/default/ > temp/AuditReport3.csv
           awk 'NF {TMP=TMP $0; next} {print TMP " "; TMP=" "} END {print TMP " "}' temp/AuditReport3.csv > temp/AuditReport4.csv
           sed -r '/^\s*$/d' temp/AuditReport4.csv > temp/AuditReport5.csv
           paste temp/AuditReport5.csv >> temp/AuditReport2.csv
           paste -d , temp/AuditReport1.csv temp/AuditReport2.csv > temp/AuditReport.csv
           cp temp/AuditReport.csv "$REPORT_FILE"
 
+      # <<< CHANGED: Only update repo variable if HAS_CHANGES is true >>>
       - name: Update LAST_PROCESSED_COMMIT repo variable
-        if: env.HAS_NEW_COMMITS == 'true'
+        if: env.HAS_CHANGES == 'true'
         run: |
-          latest=$(git log -1 --pretty=format:"%H")
+          latest=$(git log -1 --pretty=format:"%H" -- force-app/main/default/)
           echo "Updating repository variable LAST_PROCESSED_COMMIT to $latest"
           gh api \
             -X PATCH \
@@ -82,7 +85,7 @@ jobs:
           GH_TOKEN: ${{ secrets.PAT_TOKEN }}
 
       - name: Commit and push report to main
-        if: env.HAS_NEW_COMMITS == 'true'
+        if: env.HAS_CHANGES == 'true'
         run: |
           echo "Workflow name is: ${{ github.workflow }}"
           git add "$REPORT_FILE"
@@ -95,7 +98,7 @@ jobs:
           fi
 
       - name: Upload Audit Report as artifact
-        if: env.HAS_NEW_COMMITS == 'true'
+        if: env.HAS_CHANGES == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: audit-report-${{ env.REPORT_DATE }}
