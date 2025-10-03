@@ -6,8 +6,8 @@ on:
   workflow_dispatch: {}   # Manual trigger
 
 permissions:
-  contents: write
-  actions: write  # required to update repo variables via GH API
+  contents: write   # needed for git push
+  actions: write    # needed to update repo variables via GH API
 
 jobs:
   generate-and-push-audit-report:
@@ -79,64 +79,7 @@ jobs:
             -f name='LAST_PROCESSED_COMMIT' \
             -f value="$latest"
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Email report via SendGrid API
-        if: env.HAS_NEW_COMMITS == 'true'
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const fs = require("fs");
-            const fetch = require("node-fetch");
-
-            const filePath = process.env.REPORT_FILE;
-            const fileContent = fs.readFileSync(filePath).toString("base64");
-
-            const body = {
-              personalizations: [
-                { to: [{ email: "neha.sforce@gmail.com" }] }
-              ],
-              from: { email: "notifications@github.com" },
-              subject: `Daily Commit Audit Report - ${process.env.REPORT_DATE} :: ${process.env.GITHUB_WORKFLOW}`,
-              content: [{
-                type: "text/plain",
-                value: `Dear Team,
-
-                  Please find attached the Daily Commit Audit Report generated automatically by GitHub Actions on ${process.env.REPORT_DATE}.
-
-                  This report provides a consolidated record of repository activities within the last 24 hours. It is shared to ensure transparency, compliance, and effective monitoring of codebase changes.
-
-                  Regards,
-                  GitHub Actions Bot
-                  On behalf of the DevOps Team
-                  
-                  ---
-                  This is an automated email. Please do not reply directly.`
-              }],
-              attachments: [{
-                content: fileContent,
-                filename: filePath,
-                type: "text/csv",
-                disposition: "attachment"
-              }]
-            };
-
-            const res = await fetch("https://api.sendgrid.com/v3/mail/send", {
-              method: "POST",
-              headers: {
-                "Authorization": `Bearer ${process.env.SENDGRID_API_KEY}`,
-                "Content-Type": "application/json"
-              },
-              body: JSON.stringify(body)
-            });
-
-            if (!res.ok) {
-              throw new Error(`SendGrid API failed: ${res.status} ${await res.text()}`);
-            } else {
-              console.log("✅ Email sent successfully via SendGrid");
-            }
-        env:
-          SENDGRID_API_KEY: ${{ secrets.SENDGRID_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.PAT_FOR_VARS }}
 
       - name: Commit and push report to main
         if: env.HAS_NEW_COMMITS == 'true'
@@ -148,3 +91,10 @@ jobs:
           else
             git commit -m "Auto-generated audit report (Commit Ref: $LAST_PROCESSED_COMMIT)"
             git push https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }} HEAD:main
+
+      - name: Upload Audit Report as artifact
+        if: env.HAS_NEW_COMMITS == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: audit-report-${{ env.REPORT_DATE }}
+          path: ${{ env.REPORT_FILE }}
